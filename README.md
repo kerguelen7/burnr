@@ -59,6 +59,12 @@ cargo build --release
   `burn_disc_erasable`, TOC via `burn_drive_get_disc` → sessies → tracks
   (type, start-LBA, grootte per track), onvolledige sessies. Oude
   inspectiewaarden worden nu gewist zodra een nieuwe inspectie start.
+- [x] **Stap 3 — Schijfkopie lezen**: `burn_read_data` (random access,
+  2048-byte blokken) naar één bestand, met voortgangsbalk, snelheid en
+  annuleren; alleen datamedia (geen CD-audio). Apparaat-openingsmodus
+  (`burn_preset_device_open`) instelbaar: “Exclusief openen” uitzetten als de
+  bestandsbeheerder de schijf aankoppelt (automount, bijv. Nemo/udisks2);
+  grab-fouten tonen nu een gerichte hint met unmount-advies.
 - [ ] **Stap 2 — Media-details**: profiel/media-type via `burn_disc_get_profile`,
   TOC lezen (`burn_disc_read_toc`), capaciteit (`burn_disc_get_media_capacity`).
 - [ ] **Stap 3 — Schijfkopie lezen**: `burn_disc_read` met voortgangsbalk

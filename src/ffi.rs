@@ -217,20 +217,27 @@ pub struct RawLibburn {
         unsafe extern "C" fn(*mut BurnDrive, *mut *mut SpeedDescriptor) -> c_int,
     pub drive_free_speedlist: unsafe extern "C" fn(*mut *mut SpeedDescriptor) -> c_int,
     // Stap 2: profiel, capaciteit, TOC.
-    pub disc_get_profile:
-        unsafe extern "C" fn(*mut BurnDrive, *mut c_int, *mut c_char) -> c_int,
-    pub get_read_capacity:
-        unsafe extern "C" fn(*mut BurnDrive, *mut c_int, c_int) -> c_int,
+    pub disc_get_profile: unsafe extern "C" fn(*mut BurnDrive, *mut c_int, *mut c_char) -> c_int,
+    pub get_read_capacity: unsafe extern "C" fn(*mut BurnDrive, *mut c_int, c_int) -> c_int,
     pub disc_erasable: unsafe extern "C" fn(*mut BurnDrive) -> c_int,
     pub drive_get_disc: unsafe extern "C" fn(*mut BurnDrive) -> *mut BurnDisc,
-    pub disc_get_sessions:
-        unsafe extern "C" fn(*mut BurnDisc, *mut c_int) -> *mut *mut BurnSession,
+    pub disc_get_sessions: unsafe extern "C" fn(*mut BurnDisc, *mut c_int) -> *mut *mut BurnSession,
     pub session_get_tracks:
         unsafe extern "C" fn(*mut BurnSession, *mut c_int) -> *mut *mut BurnTrack,
     pub track_get_entry: unsafe extern "C" fn(*mut BurnTrack, *mut TocEntry),
     pub session_get_leadout_entry: unsafe extern "C" fn(*mut BurnSession, *mut TocEntry),
     pub disc_get_incomplete_sessions: unsafe extern "C" fn(*mut BurnDisc) -> c_int,
     pub disc_free: unsafe extern "C" fn(*mut BurnDisc),
+    // Stap 3: apparaat-openingsbeleid en random-access lezen.
+    pub preset_device_open: unsafe extern "C" fn(c_int, c_int, c_int),
+    pub read_data: unsafe extern "C" fn(
+        *mut BurnDrive,
+        c_longlong,
+        *mut c_char,
+        c_longlong,
+        *mut c_longlong,
+        c_int,
+    ) -> c_int,
 }
 
 macro_rules! resolve {
@@ -312,10 +319,16 @@ impl RawLibburn {
                 "burn_get_read_capacity",
                 unsafe extern "C" fn(*mut BurnDrive, *mut c_int, c_int) -> c_int
             );
-            let disc_erasable =
-                resolve!(lib, "burn_disc_erasable", unsafe extern "C" fn(*mut BurnDrive) -> c_int);
-            let drive_get_disc =
-                resolve!(lib, "burn_drive_get_disc", unsafe extern "C" fn(*mut BurnDrive) -> *mut BurnDisc);
+            let disc_erasable = resolve!(
+                lib,
+                "burn_disc_erasable",
+                unsafe extern "C" fn(*mut BurnDrive) -> c_int
+            );
+            let drive_get_disc = resolve!(
+                lib,
+                "burn_drive_get_disc",
+                unsafe extern "C" fn(*mut BurnDrive) -> *mut BurnDisc
+            );
             let disc_get_sessions = resolve!(
                 lib,
                 "burn_disc_get_sessions",
@@ -326,8 +339,11 @@ impl RawLibburn {
                 "burn_session_get_tracks",
                 unsafe extern "C" fn(*mut BurnSession, *mut c_int) -> *mut *mut BurnTrack
             );
-            let track_get_entry =
-                resolve!(lib, "burn_track_get_entry", unsafe extern "C" fn(*mut BurnTrack, *mut TocEntry));
+            let track_get_entry = resolve!(
+                lib,
+                "burn_track_get_entry",
+                unsafe extern "C" fn(*mut BurnTrack, *mut TocEntry)
+            );
             let session_get_leadout_entry = resolve!(
                 lib,
                 "burn_session_get_leadout_entry",
@@ -338,8 +354,24 @@ impl RawLibburn {
                 "burn_disc_get_incomplete_sessions",
                 unsafe extern "C" fn(*mut BurnDisc) -> c_int
             );
-            let disc_free =
-                resolve!(lib, "burn_disc_free", unsafe extern "C" fn(*mut BurnDisc));
+            let disc_free = resolve!(lib, "burn_disc_free", unsafe extern "C" fn(*mut BurnDisc));
+            let preset_device_open = resolve!(
+                lib,
+                "burn_preset_device_open",
+                unsafe extern "C" fn(c_int, c_int, c_int)
+            );
+            let read_data = resolve!(
+                lib,
+                "burn_read_data",
+                unsafe extern "C" fn(
+                    *mut BurnDrive,
+                    c_longlong,
+                    *mut c_char,
+                    c_longlong,
+                    *mut c_longlong,
+                    c_int,
+                ) -> c_int
+            );
 
             Ok(Self {
                 _lib: lib,
@@ -365,6 +397,8 @@ impl RawLibburn {
                 session_get_leadout_entry,
                 disc_get_incomplete_sessions,
                 disc_free,
+                preset_device_open,
+                read_data,
             })
         }
     }

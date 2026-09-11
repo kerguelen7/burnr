@@ -28,6 +28,24 @@ pub enum ScanState {
     Failed { error: String },
 }
 
+/// Lopende schijfkopie.
+#[derive(Clone, Debug)]
+pub struct ActiveRead {
+    pub index: usize,
+    pub blocks_done: i64,
+    pub total_blocks: i32,
+    pub kbps: f64,
+}
+
+impl ActiveRead {
+    pub fn fraction(&self) -> f32 {
+        if self.total_blocks <= 0 {
+            return 0.0;
+        }
+        (self.blocks_done as f32 / self.total_blocks as f32).clamp(0.0, 1.0)
+    }
+}
+
 pub struct App {
     pub log: LogStore,
     pub lib_state: LibState,
@@ -36,7 +54,13 @@ pub struct App {
     pub selected: Option<usize>,
     /// Station waar momenteel een inspectie op draait (grab in de worker).
     pub busy_drive: Option<usize>,
+    /// Lopende schijfkopie (één tegelijk; de worker is serieel).
+    pub active_read: Option<ActiveRead>,
+    /// Pad voor de volgende schijfkopie.
+    pub read_path: String,
     pub settings: BurnSettings,
+    /// Drives exclusief openen (O_EXCL)? Uitzetten bij automount-conflicten.
+    pub exclusive_open: bool,
 
     cmd_tx: Sender<Command>,
     events: Receiver<Event>,
@@ -69,7 +93,10 @@ impl App {
             drives: Vec::new(),
             selected: None,
             busy_drive: None,
+            active_read: None,
+            read_path: String::new(),
             settings: BurnSettings::default(),
+            exclusive_open: true,
             cmd_tx,
             events: event_rx,
             worker: Some(handle),
@@ -82,7 +109,10 @@ impl App {
             Level::Info,
             "LibBurn GUI gestart — libburn wordt van het systeem geladen…".to_string(),
         );
-        app.send(Command::LoadLibrary(None));
+        app.send(Command::LoadLibrary {
+            path: None,
+            exclusive: app.exclusive_open,
+        });
         app
     }
 
@@ -102,7 +132,7 @@ impl App {
     }
 
     pub fn request_inspect(&mut self, index: usize) {
-        if self.busy_drive.is_some() {
+        if self.busy_drive.is_some() || self.active_read.is_some() {
             return;
         }
         self.log.push(
@@ -117,7 +147,50 @@ impl App {
         self.auto_scan_queued = true;
         self.log
             .push(Level::Info, "libburn (opnieuw) laden…".to_string());
-        self.send(Command::LoadLibrary(path));
+        self.send(Command::LoadLibrary {
+            path,
+            exclusive: self.exclusive_open,
+        });
+    }
+
+    /// Wijzig de exclusief-openen-modus: vereist herladen + nieuwe scan.
+    pub fn set_exclusive_open(&mut self, on: bool) {
+        if self.exclusive_open == on {
+            return;
+        }
+        self.exclusive_open = on;
+        self.reload_library(None);
+    }
+
+    pub fn request_read(&mut self, index: usize, path: String) {
+        if self.active_read.is_some() || self.busy_drive.is_some() {
+            return;
+        }
+        let expanded = expand_home(&path);
+        if expanded.trim().is_empty() {
+            self.log
+                .push(Level::Warning, "Geen uitvoerbestand opgegeven".to_string());
+            return;
+        }
+        self.log.push(
+            Level::Info,
+            format!(
+                "Schijfkopie aangevraagd voor station {index} → `{}`",
+                expanded
+            ),
+        );
+        self.send(Command::ReadDisc {
+            index,
+            path: expanded,
+        });
+    }
+
+    pub fn cancel_read(&mut self) {
+        if self.active_read.is_some() {
+            self.log
+                .push(Level::Info, "Kopie annuleren aangevraagd".to_string());
+            self.send(Command::CancelRead);
+        }
     }
 
     fn handle_event(&mut self, ev: Event) {
@@ -170,6 +243,43 @@ impl App {
                     d.inspect_error = Some(error);
                 }
             }
+            Event::ReadStarted {
+                index,
+                total_blocks,
+            } => {
+                self.active_read = Some(ActiveRead {
+                    index,
+                    blocks_done: 0,
+                    total_blocks,
+                    kbps: 0.0,
+                });
+            }
+            Event::ReadProgress {
+                index,
+                blocks_done,
+                total_blocks,
+                kbps,
+            } => {
+                if let Some(r) = self.active_read.as_mut() {
+                    if r.index == index {
+                        r.blocks_done = blocks_done;
+                        r.total_blocks = total_blocks;
+                        r.kbps = kbps;
+                    }
+                }
+            }
+            Event::ReadDone => {
+                self.active_read = None;
+            }
+            Event::ReadFailed { index, error } => {
+                self.active_read = None;
+                if let Some(d) = self.drives.get_mut(index) {
+                    d.inspect_error = Some(error);
+                }
+            }
+            Event::ReadCancelled => {
+                self.active_read = None;
+            }
             Event::WorkerStopped => {}
         }
     }
@@ -186,7 +296,8 @@ impl eframe::App for App {
         // Actief bezig? Dan blijft de UI het event-kanaal pollen.
         let busy = matches!(self.lib_state, LibState::Loading)
             || self.scan_state == ScanState::Scanning
-            || self.busy_drive.is_some();
+            || self.busy_drive.is_some()
+            || self.active_read.is_some();
         if busy {
             ctx.request_repaint_after(Duration::from_millis(80));
         }
@@ -200,6 +311,25 @@ impl eframe::App for App {
         ui::log_panel::show(ui, self);
         ui::details_panel::show(ui, self);
     }
+}
+
+/// Zet een pad dat met `~` begint om naar een absoluut pad via $HOME.
+fn expand_home(path: &str) -> String {
+    let p = path.trim();
+    if p == "~" {
+        return std::env::var("HOME").unwrap_or_else(|_| p.to_string());
+    }
+    if let Some(rest) = p.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            let mut s = home;
+            if !s.ends_with('/') {
+                s.push('/');
+            }
+            s.push_str(rest);
+            return s;
+        }
+    }
+    p.to_string()
 }
 
 impl Drop for App {

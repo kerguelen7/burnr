@@ -235,6 +235,10 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
             ui.add_space(4.0);
             toc_section(ui, media);
 
+            ui.add_space(6.0);
+            ui.separator();
+            read_section(ui, app, d);
+
             if media.speeds.is_empty() {
                 ui.weak("Geen snelheidsinformatie beschikbaar.");
             } else {
@@ -281,6 +285,47 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
             ui.weak("Nog niet geïnspecteerd — klik op “Media inspecteren”.");
         }
     });
+}
+
+/// Schijfkopie-sectie: pad + startknop, of voortgang + annuleren tijdens het lezen.
+fn read_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
+    ui.label(egui::RichText::new("Schijfkopie (data)").strong());
+
+    if let Some(r) = app.active_read.clone() {
+        if r.index == d.index {
+            ui.add(egui::ProgressBar::new(r.fraction()).show_percentage());
+            ui.horizontal(|ui| {
+                ui.label(format!("{} / {} blokken", r.blocks_done, r.total_blocks));
+                ui.label(format!("{:.0} kB/s", r.kbps));
+                if ui.button("⏹ Annuleren").clicked() {
+                    app.cancel_read();
+                }
+            });
+        } else {
+            ui.weak("Er draait momenteel een kopie op een ander station.");
+        }
+        return;
+    }
+
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut app.read_path)
+                .hint_text("~/kopie.iso")
+                .desired_width(220.0),
+        );
+        let ready = app.scan_state == ScanState::Done && app.busy_drive.is_none();
+        if ui
+            .add_enabled(ready, egui::Button::new("💾 Kopie maken"))
+            .clicked()
+        {
+            let path = app.read_path.clone();
+            app.request_read(d.index, path);
+        }
+    });
+    ui.weak(
+        "Leest alle datablokken (2048 B) naar één bestand — geschikt voor \
+         CD/DVD/BD-data, niet voor CD-audio.",
+    );
 }
 
 /// TOC-weergave: per sessie de tracks met type, startadres en grootte.

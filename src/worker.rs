@@ -6,7 +6,7 @@
 //! voor duidelijke feedback, en elke event laat de UI hervappen.
 
 use std::collections::VecDeque;
-use std::ffi::{c_char, c_int};
+use std::ffi::{c_char, c_int, c_longlong};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -129,23 +129,68 @@ impl DriveEntry {
 /// Commando's van de GUI naar de worker.
 pub enum Command {
     /// `None` = automatisch zoeken (`LIBBURN_SO`, daarna standaardnamen).
-    LoadLibrary(Option<String>),
+    /// `exclusive` = drives exclusief openen (O_EXCL); uitzetten als de
+    /// bestandsbeheerder de schijf heeft aangekoppeld (automount).
+    LoadLibrary {
+        path: Option<String>,
+        exclusive: bool,
+    },
     Scan,
     InspectDrive(usize),
+    /// Maak een schijfkopie (data-blokken) naar een bestand.
+    ReadDisc {
+        index: usize,
+        path: String,
+    },
+    /// Bezig lopende kopie annuleren.
+    CancelRead,
     Shutdown,
 }
 
 /// Events van de worker naar de GUI.
 pub enum Event {
     Log(Level, String),
-    LibLoaded { version: String, path: String },
-    LibLoadFailed { error: String },
+    LibLoaded {
+        version: String,
+        path: String,
+    },
+    LibLoadFailed {
+        error: String,
+    },
     ScanStarted,
-    ScanDone { drives: Vec<DriveEntry> },
-    ScanFailed { error: String },
-    InspectStarted { index: usize },
-    InspectDone { index: usize, media: MediaInfo },
-    InspectFailed { index: usize, error: String },
+    ScanDone {
+        drives: Vec<DriveEntry>,
+    },
+    ScanFailed {
+        error: String,
+    },
+    InspectStarted {
+        index: usize,
+    },
+    InspectDone {
+        index: usize,
+        media: MediaInfo,
+    },
+    InspectFailed {
+        index: usize,
+        error: String,
+    },
+    ReadStarted {
+        index: usize,
+        total_blocks: i32,
+    },
+    ReadProgress {
+        index: usize,
+        blocks_done: i64,
+        total_blocks: i32,
+        kbps: f64,
+    },
+    ReadDone,
+    ReadFailed {
+        index: usize,
+        error: String,
+    },
+    ReadCancelled,
     WorkerStopped,
 }
 
@@ -197,9 +242,20 @@ fn run(cmds: Receiver<Command>, events: Sender<Event>, ctx: egui::Context) {
             },
         };
         match cmd {
-            Command::LoadLibrary(path) => load_library(&mut state, path, &notify),
+            Command::LoadLibrary { path, exclusive } => {
+                load_library(&mut state, path, exclusive, &notify)
+            }
             Command::Scan => scan(&mut state, &cmds, &mut pending, &notify),
             Command::InspectDrive(index) => inspect(state.as_ref(), index, &notify),
+            Command::ReadDisc { index, path } => {
+                read_disc(&state, index, &path, &cmds, &mut pending, &notify)
+            }
+            Command::CancelRead => {
+                notify.log(
+                    Level::Warning,
+                    "Annuleren gevraagd, maar er is geen kopie bezig",
+                );
+            }
             Command::Shutdown => shutdown = true,
         }
     }
@@ -208,7 +264,12 @@ fn run(cmds: Receiver<Command>, events: Sender<Event>, ctx: egui::Context) {
     let _ = events.send(Event::WorkerStopped);
 }
 
-fn load_library(state: &mut Option<WorkerState>, custom: Option<String>, notify: &Notifier) {
+fn load_library(
+    state: &mut Option<WorkerState>,
+    custom: Option<String>,
+    exclusive: bool,
+    notify: &Notifier,
+) {
     // Een eventueel eerdere sessie netjes afsluiten.
     shutdown_lib(state.take(), notify);
 
@@ -235,6 +296,21 @@ fn load_library(state: &mut Option<WorkerState>, custom: Option<String>, notify:
                     last_err = format!("`{cand}`: burn_initialize() mislukte");
                     continue;
                 }
+                // Apparaat-openingsbeleid (vlak na initialize, vóór de scan):
+                // exclusief (O_EXCL) of niet — uitzetten als de bestandsbeheerder
+                // de schijf heeft aangekoppeld (automount).
+                (raw.preset_device_open)(if exclusive { 1 } else { 0 }, 0, 0);
+                notify.log(
+                    Level::Info,
+                    format!(
+                        "Apparaat-openingsmodus: {}",
+                        if exclusive {
+                            "exclusief (O_EXCL)"
+                        } else {
+                            "niet-exclusief (geschikt bij automount)"
+                        }
+                    ),
+                );
                 let (mut maj, mut min, mut mic) = (0, 0, 0);
                 (raw.version)(&mut maj, &mut min, &mut mic);
                 let version = format!("{maj}.{min}.{mic}");
@@ -418,12 +494,21 @@ fn inspect(state: Option<&WorkerState>, index: usize, notify: &Notifier) {
 
     let grabbed = unsafe { (st.raw.drive_grab)(di.drive, 0) } == 1;
     if !grabbed {
-        let msg = "Grab mislukt — station mogelijk in gebruik door een ander programma";
+        let adr = unsafe { adr_of(&di, &st.raw) };
+        let msg = format!(
+            "Grab mislukt voor {} — drive mogelijk bezet. Mogelijke oorzaak: de schijf is \
+             door de bestandsbeheerder aangekoppeld (automount). Los dit op met \
+             `udisksctl unmount -b {adr}` of zet “Exclusief openen” uit \
+             (Instellingen → Apparaat).",
+            if adr.is_empty() {
+                format!("station {index}")
+            } else {
+                adr.clone()
+            },
+            adr = if adr.is_empty() { "/dev/srX" } else { &adr },
+        );
         notify.log(Level::Error, format!("Station {index}: {msg}"));
-        notify.send(Event::InspectFailed {
-            index,
-            error: msg.to_string(),
-        });
+        notify.send(Event::InspectFailed { index, error: msg });
         return;
     }
     notify.log(
@@ -643,6 +728,215 @@ fn free_drive_list(st: &mut WorkerState) {
     }
 }
 
+/// Grootte van één lees-chunk: 1024 blokken = 2 MiB.
+const READ_CHUNK_BLOCKS: i64 = 1024;
+
+/// Maakt een schijfkopie van de datamedia naar een bestand.
+///
+/// Gebruikt `burn_read_data` (random access, 2048-byte blokken): geschikt voor
+/// CD/DVD/BD-datamedia, niet voor CD-audio. De drive wordt voor de duur van de
+/// kopie gegrabbed en daarna weer vrijgegeven. Annuleren kan tussentijds.
+fn read_disc(
+    state: &Option<WorkerState>,
+    index: usize,
+    path: &str,
+    cmds: &Receiver<Command>,
+    pending: &mut VecDeque<Command>,
+    notify: &Notifier,
+) {
+    use std::io::Write;
+
+    let Some(st) = state else {
+        notify.log(
+            Level::Warning,
+            "Kopie aangevraagd, maar libburn is niet geladen",
+        );
+        return;
+    };
+    if st.infos.is_null() || index >= st.n_drives {
+        notify.log(
+            Level::Warning,
+            format!("Kopie aangevraagd voor onbekend station {index}"),
+        );
+        return;
+    }
+    let path = path.trim();
+    if path.is_empty() {
+        notify.log(Level::Warning, "Kopie aangevraagd zonder uitvoerbestand");
+        return;
+    }
+
+    let di = unsafe { *st.infos.add(index) };
+    notify.log(
+        Level::Info,
+        format!("Station {index}: schijfkopie starten naar `{path}`…"),
+    );
+
+    // Niet overschrijven: kies een andere naam.
+    if std::path::Path::new(path).exists() {
+        let msg = format!("Uitvoerbestand bestaat al: `{path}` — kies een andere naam");
+        notify.log(Level::Error, format!("Station {index}: {msg}"));
+        notify.send(Event::ReadFailed { index, error: msg });
+        return;
+    }
+
+    let grabbed = unsafe { (st.raw.drive_grab)(di.drive, 0) } == 1;
+    if !grabbed {
+        let adr = unsafe { adr_of(&di, &st.raw) };
+        let msg = format!(
+            "Grab mislukt voor {} — drive mogelijk bezet (bijv. automount door de \
+             bestandsbeheerder). Zet “Exclusief openen” uit (Instellingen → Apparaat) \
+             of unmount de schijf.",
+            if adr.is_empty() {
+                format!("station {index}")
+            } else {
+                adr.clone()
+            }
+        );
+        notify.log(Level::Error, format!("Station {index}: {msg}"));
+        notify.send(Event::ReadFailed { index, error: msg });
+        return;
+    }
+
+    // Capaciteit bepalen (blokken van 2048 bytes).
+    let mut capacity: c_int = 0;
+    if unsafe { (st.raw.get_read_capacity)(di.drive, &mut capacity, 0) } != 1 || capacity <= 0 {
+        unsafe { (st.raw.drive_release)(di.drive, 0) };
+        let msg = "Geen leesbare capaciteit — media leeg of geen datamedia \
+                   (CD-audio wordt nog niet ondersteund)"
+            .to_string();
+        notify.log(Level::Error, format!("Station {index}: {msg}"));
+        notify.send(Event::ReadFailed { index, error: msg });
+        return;
+    }
+    let total_blocks = capacity as i64;
+    notify.log(
+        Level::Info,
+        format!(
+            "Station {index}: {} blokken (≈ {}) lezen…",
+            total_blocks,
+            format_blocks(capacity)
+        ),
+    );
+    notify.send(Event::ReadStarted {
+        index,
+        total_blocks: capacity,
+    });
+
+    let mut file = match std::fs::File::create_new(path) {
+        Ok(f) => f,
+        Err(e) => {
+            unsafe { (st.raw.drive_release)(di.drive, 0) };
+            let msg = format!("Kan `{path}` niet aanmaken: {e}");
+            notify.log(Level::Error, format!("Station {index}: {msg}"));
+            notify.send(Event::ReadFailed { index, error: msg });
+            return;
+        }
+    };
+
+    let mut buf = vec![0u8; READ_CHUNK_BLOCKS as usize * 2048];
+    let mut blocks_done: i64 = 0;
+    let started = std::time::Instant::now();
+    let mut last_progress = started;
+    let mut cancelled = false;
+    let mut error: Option<String> = None;
+
+    while blocks_done < total_blocks {
+        // Annuleren/afsluiten tussentijds mogelijk maken.
+        match cmds.try_recv() {
+            Ok(Command::CancelRead) => {
+                cancelled = true;
+                break;
+            }
+            Ok(Command::Shutdown) => {
+                pending.push_front(Command::Shutdown);
+                cancelled = true;
+                break;
+            }
+            Ok(other) => pending.push_back(other),
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => {
+                cancelled = true;
+                break;
+            }
+        }
+
+        let want_blocks = (total_blocks - blocks_done).min(READ_CHUNK_BLOCKS);
+        let want_bytes = want_blocks * 2048;
+        let byte_address = blocks_done * 2048;
+        let mut got: c_longlong = 0;
+        let ret = unsafe {
+            (st.raw.read_data)(
+                di.drive,
+                byte_address,
+                buf.as_mut_ptr() as *mut c_char,
+                want_bytes,
+                &mut got,
+                0,
+            )
+        };
+
+        if got > 0 {
+            let got = got as usize;
+            if let Err(e) = file.write_all(&buf[..got]) {
+                error = Some(format!("Schrijffout naar `{path}`: {e}"));
+                break;
+            }
+            blocks_done += (got / 2048) as i64;
+        }
+
+        if ret <= 0 {
+            let fail_lba = (byte_address + got) / 2048;
+            error = Some(format!(
+                "Leesfout bij LBA {fail_lba} (blok {} van {}) — kopie afgebroken; \
+                 het deelbestand blijft staan",
+                blocks_done, total_blocks
+            ));
+            break;
+        }
+
+        // Voortgang max. ~5× per seconde sturen.
+        if last_progress.elapsed() >= Duration::from_millis(200) || blocks_done >= total_blocks {
+            let secs = started.elapsed().as_secs_f64().max(0.001);
+            let kbps = (blocks_done * 2048) as f64 / secs / 1000.0;
+            notify.send(Event::ReadProgress {
+                index,
+                blocks_done,
+                total_blocks: capacity,
+                kbps,
+            });
+            last_progress = std::time::Instant::now();
+        }
+    }
+
+    drop(file);
+    unsafe { (st.raw.drive_release)(di.drive, 0) };
+
+    if cancelled {
+        notify.log(
+            Level::Warning,
+            format!(
+                "Station {index}: kopie geannuleerd na {} blokken; `{path}` blijft (onvolledig) staan",
+                blocks_done
+            ),
+        );
+        notify.send(Event::ReadCancelled);
+    } else if let Some(err) = error {
+        notify.log(Level::Error, format!("Station {index}: {err}"));
+        notify.send(Event::ReadFailed { index, error: err });
+    } else {
+        notify.log(
+            Level::Success,
+            format!(
+                "Station {index}: schijfkopie klaar — {} ({}) → `{path}`",
+                blocks_done,
+                format_blocks(blocks_done as i32)
+            ),
+        );
+        notify.send(Event::ReadDone);
+    }
+}
+
 fn shutdown_lib(state: Option<WorkerState>, notify: &Notifier) {
     let Some(mut st) = state else { return };
     free_drive_list(&mut st);
@@ -768,7 +1062,12 @@ mod tests {
         let (event_tx, event_rx) = channel::<Event>();
         let _handle = spawn(cmd_rx, event_tx, egui::Context::default());
 
-        cmd_tx.send(Command::LoadLibrary(None)).unwrap();
+        cmd_tx
+            .send(Command::LoadLibrary {
+                path: None,
+                exclusive: true,
+            })
+            .unwrap();
         cmd_tx.send(Command::Scan).unwrap();
 
         let deadline = std::time::Instant::now() + Duration::from_secs(60);

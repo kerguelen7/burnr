@@ -16,6 +16,8 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                 burn_section(ui, app);
                 ui.add_space(4.0);
                 media_section(ui, app);
+                ui.add_space(4.0);
+                device_section(ui, app);
 
                 ui.add_space(8.0);
                 ui.separator();
@@ -89,6 +91,25 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App) {
                 ui.label("Padding (KiB):");
                 ui.add(egui::DragValue::new(&mut s.padding_kib).range(0..=100_000));
             });
+        });
+}
+
+fn device_section(ui: &mut egui::Ui, app: &mut App) {
+    egui::CollapsingHeader::new(egui::RichText::new("💽 Apparaat").strong())
+        .default_open(false)
+        .show(ui, |ui| {
+            let mut want = app.exclusive_open;
+            if ui
+                .checkbox(&mut want, "Exclusief openen (O_EXCL)")
+                .changed()
+            {
+                app.set_exclusive_open(want);
+            }
+            ui.weak(
+                "Uitzetten als de bestandsbeheerder de schijf aankoppelt \
+                 (automount, bijv. Nemo/udisks2).",
+            );
+            ui.weak("Wijzigen herlaadt libburn en scant opnieuw.");
         });
 }
 
