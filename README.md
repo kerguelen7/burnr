@@ -54,6 +54,11 @@ cargo build --release
   drive-details (capabilities, bloktypen, buffer), media-inspectie
   (grab → status → snelheden → release), feedback-log met niveaufilter,
   instellingenpaneel (waarden worden beheerd, koppeling volgt later).
+- [x] **Stap 2 — Media-details**: mediatype via `burn_disc_get_profile`,
+  leesbare capaciteit via `burn_get_read_capacity`, herbeschrijfbaarheid via
+  `burn_disc_erasable`, TOC via `burn_drive_get_disc` → sessies → tracks
+  (type, start-LBA, grootte per track), onvolledige sessies. Oude
+  inspectiewaarden worden nu gewist zodra een nieuwe inspectie start.
 - [ ] **Stap 2 — Media-details**: profiel/media-type via `burn_disc_get_profile`,
   TOC lezen (`burn_disc_read_toc`), capaciteit (`burn_disc_get_media_capacity`).
 - [ ] **Stap 3 — Schijfkopie lezen**: `burn_disc_read` met voortgangsbalk

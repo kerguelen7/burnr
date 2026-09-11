@@ -151,6 +151,9 @@ impl App {
             Event::InspectStarted { index } => {
                 self.busy_drive = Some(index);
                 if let Some(d) = self.drives.get_mut(index) {
+                    // Oude waarden direct weg: zo kan een nieuwe inspectie
+                    // nooit verward worden met de vorige.
+                    d.media = None;
                     d.inspect_error = None;
                 }
             }

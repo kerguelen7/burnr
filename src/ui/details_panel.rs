@@ -3,7 +3,10 @@
 use crate::app::{App, LibState, ScanState};
 use crate::ffi::DiscStatus;
 use crate::ui::colors;
-use crate::worker::{disc_label, drive_status_label, speed_multiplier_label, speed_source_label};
+use crate::worker::{
+    disc_label, drive_status_label, format_blocks, profile_fallback_name, speed_multiplier_label,
+    speed_source_label,
+};
 
 pub fn show(ui: &mut egui::Ui, app: &mut App) {
     egui::CentralPanel::default().show(ui, |ui| {
@@ -200,6 +203,38 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
                 drive_status_label(media.drive_status)
             ));
 
+            // Mediatype (SCSI-profiel).
+            if !media.profile_name.is_empty() {
+                ui.label(format!(
+                    "Mediatype: {} (profiel 0x{:02X})",
+                    media.profile_name, media.profile_no
+                ));
+            } else if media.profile_no > 0 {
+                let fallback = profile_fallback_name(media.profile_no);
+                ui.label(format!(
+                    "Mediatype: {} (profiel 0x{:02X})",
+                    if fallback.is_empty() {
+                        "onbekend"
+                    } else {
+                        fallback
+                    },
+                    media.profile_no
+                ));
+            }
+            ui.horizontal_wrapped(|ui| {
+                chip(ui, "herbeschrijfbaar", media.erasable);
+                if let Some(blocks) = media.read_capacity_blocks {
+                    ui.label(format!(
+                        "Leesbare capaciteit: {} ({} blokken)",
+                        format_blocks(blocks),
+                        blocks
+                    ));
+                }
+            });
+
+            ui.add_space(4.0);
+            toc_section(ui, media);
+
             if media.speeds.is_empty() {
                 ui.weak("Geen snelheidsinformatie beschikbaar.");
             } else {
@@ -246,4 +281,87 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
             ui.weak("Nog niet geïnspecteerd — klik op “Media inspecteren”.");
         }
     });
+}
+
+/// TOC-weergave: per sessie de tracks met type, startadres en grootte.
+fn toc_section(ui: &mut egui::Ui, media: &crate::worker::MediaInfo) {
+    if media.sessions.is_empty() {
+        match media.disc_status {
+            DiscStatus::Empty => {}
+            DiscStatus::Blank => {
+                ui.weak("Lege media — nog geen TOC.");
+            }
+            _ => {
+                ui.weak("Geen TOC beschikbaar voor deze media.");
+            }
+        }
+        return;
+    }
+
+    ui.label(egui::RichText::new("Inhoud (TOC)").strong());
+    egui::Grid::new("toc_grid")
+        .striped(true)
+        .num_columns(6)
+        .spacing([16.0, 3.0])
+        .show(ui, |ui| {
+            ui.strong("Sessie");
+            ui.strong("Track");
+            ui.strong("Type");
+            ui.strong("Start-LBA");
+            ui.strong("Blokken");
+            ui.strong("≈ Grootte");
+            ui.end_row();
+
+            for s in &media.sessions {
+                for t in &s.tracks {
+                    ui.label(t.session.to_string());
+                    ui.label(t.track_no.to_string());
+                    ui.label(if t.is_data {
+                        if t.copy_permitted {
+                            "data · kopie ok"
+                        } else {
+                            "data"
+                        }
+                    } else if t.copy_permitted {
+                        "audio · kopie ok"
+                    } else {
+                        "audio"
+                    });
+                    ui.monospace(t.start_lba.to_string());
+                    ui.label(if t.blocks > 0 {
+                        t.blocks.to_string()
+                    } else {
+                        "—".to_string()
+                    });
+                    ui.label(if t.blocks > 0 {
+                        format_blocks(t.blocks)
+                    } else {
+                        "—".to_string()
+                    });
+                    ui.end_row();
+                }
+                ui.label(
+                    egui::RichText::new(format!(
+                        "sessie {} — LBA {} … {}",
+                        s.index + 1,
+                        s.start_lba,
+                        s.end_lba.saturating_sub(1)
+                    ))
+                    .small()
+                    .color(colors::DIM),
+                );
+                ui.end_row();
+            }
+        });
+
+    if media.incomplete_sessions > 0 {
+        ui.label(
+            egui::RichText::new(format!(
+                "⚠ {} onvolledige sessie(s) aanwezig",
+                media.incomplete_sessions
+            ))
+            .small()
+            .color(colors::WARN),
+        );
+    }
 }

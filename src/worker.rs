@@ -11,6 +11,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use crate::ffi;
 use crate::ffi::{
     BURN_DRIVE_ADR_LEN, DiscStatus, DriveInfo, DriveStatus, Progress, RawLibburn, SpeedDescriptor,
     cbuf_to_string,
@@ -52,12 +53,44 @@ pub struct SpeedEntry {
     pub read_speed: i32,
 }
 
-/// Resultaat van een media-inspectie (grab → status → snelheden → release).
+/// Eén track uit de TOC van de ingelegde schijf.
+#[derive(Clone, Debug)]
+pub struct TocTrack {
+    pub session: u32,
+    pub track_no: u32,
+    pub start_lba: i32,
+    /// Aantal blokken (2048 bytes per blok); 0 = onbekend.
+    pub blocks: i32,
+    /// `control`-bit2 uit de TOC: true = datatrack, false = audio.
+    pub is_data: bool,
+    pub copy_permitted: bool,
+}
+
+/// Eén complete sessie uit de TOC.
+#[derive(Clone, Debug)]
+pub struct TocSession {
+    pub index: usize,
+    pub start_lba: i32,
+    /// Eindadres volgens de lead-out (exclusief); -1 = onbekend.
+    pub end_lba: i32,
+    pub tracks: Vec<TocTrack>,
+}
+
+/// Resultaat van een media-inspectie (grab → status → profiel → TOC → snelheden → release).
 #[derive(Clone, Debug)]
 pub struct MediaInfo {
     pub disc_status: DiscStatus,
     pub drive_status: DriveStatus,
     pub speeds: Vec<SpeedEntry>,
+    /// Stap 2: SCSI-profielnummer (0 = geen media / onbekend).
+    pub profile_no: i32,
+    pub profile_name: String,
+    /// Leesbare capaciteit in blokken van 2048 bytes (`burn_get_read_capacity`).
+    pub read_capacity_blocks: Option<i32>,
+    /// Herbeschrijfbaar (`burn_disc_erasable`).
+    pub erasable: bool,
+    pub sessions: Vec<TocSession>,
+    pub incomplete_sessions: i32,
 }
 
 /// Kopie van een `burn_drive_info` — bevat geen pointers naar libburn,
@@ -413,6 +446,66 @@ fn inspect(state: Option<&WorkerState>, index: usize, notify: &Notifier) {
         format!("Station {index}: media = {}", disc_label(disc)),
     );
 
+    // Stap 2: profiel (mediatype) opvragen.
+    let mut profile_no: c_int = 0;
+    let mut profile_buf = [0 as c_char; 80];
+    let profile_ok =
+        unsafe { (st.raw.disc_get_profile)(di.drive, &mut profile_no, profile_buf.as_mut_ptr()) };
+    let profile_name = if profile_ok == 1 {
+        let name = cbuf_to_string(&profile_buf);
+        if name.is_empty() {
+            profile_fallback_name(profile_no).to_string()
+        } else {
+            name
+        }
+    } else {
+        String::new()
+    };
+    if !profile_name.is_empty() {
+        notify.log(
+            Level::Info,
+            format!(
+                "Station {index}: mediatype = {} (profiel 0x{:02X})",
+                profile_name, profile_no
+            ),
+        );
+    }
+
+    // Leesbare capaciteit (kan falen op lege media — geen probleem).
+    let mut capacity: c_int = 0;
+    let read_capacity =
+        if unsafe { (st.raw.get_read_capacity)(di.drive, &mut capacity, 0) } == 1 && capacity > 0 {
+            Some(capacity)
+        } else {
+            None
+        };
+    if let Some(blocks) = read_capacity {
+        notify.log(
+            Level::Info,
+            format!(
+                "Station {index}: leesbare capaciteit ≈ {}",
+                format_blocks(blocks)
+            ),
+        );
+    }
+
+    let erasable = unsafe { (st.raw.disc_erasable)(di.drive) } != 0;
+
+    // Stap 2: TOC-model van de schijf opbouwen (alleen zinvol bij media met
+    // inhoud; bij lege media geeft de drive NULL of een leeg model).
+    let (sessions, incomplete) = unsafe { read_toc(&st.raw, di.drive) };
+    if !sessions.is_empty() {
+        let total_tracks: usize = sessions.iter().map(|s| s.tracks.len()).sum();
+        notify.log(
+            Level::Info,
+            format!(
+                "Station {index}: TOC gelezen — {} sessie(s), {} track(s)",
+                sessions.len(),
+                total_tracks
+            ),
+        );
+    }
+
     // Snelheden: burn_drive_get_speedlist geeft een kopie van de lijst terug,
     // die we via .next doorlopen en daarna vrijgeven.
     let mut speeds = Vec::new();
@@ -454,8 +547,92 @@ fn inspect(state: Option<&WorkerState>, index: usize, notify: &Notifier) {
             disc_status: disc,
             drive_status,
             speeds,
+            profile_no: if profile_ok == 1 { profile_no } else { 0 },
+            profile_name,
+            read_capacity_blocks: read_capacity,
+            erasable,
+            sessions,
+            incomplete_sessions: incomplete,
         },
     });
+}
+
+/// Bouwt het TOC-model van de ingelegde schijf op via
+/// burn_drive_get_disc → burn_disc_get_sessions → burn_session_get_tracks
+/// → burn_track_get_entry / burn_session_get_leadout_entry.
+/// De schijf moet gegrabbed zijn; het disc-model wordt hier netjes vrijgegeven.
+///
+/// Semantiek (uit libburn-bron, mmc.c): bij een track is `start_lba` het begin
+/// en `track_blocks` de grootte. Bij de lead-out (point 0xA2) is `start_lba`
+/// het begin van de lead-out-zone (= einde van de trackdata) en is
+/// `track_blocks` 0. De sessiegrens is dus: start = eerste track, einde =
+/// leadout.start_lba (exclusief).
+unsafe fn read_toc(raw: &RawLibburn, drive: *mut ffi::BurnDrive) -> (Vec<TocSession>, i32) {
+    // Edition 2024: de body van een `unsafe fn` is zelf safe; elke onveilige
+    // operatie staat hier expliciet in één `unsafe`-blok.
+    unsafe {
+        let disc = (raw.drive_get_disc)(drive);
+        if disc.is_null() {
+            return (Vec::new(), 0);
+        }
+
+        let mut sessions_out: Vec<TocSession> = Vec::new();
+        let mut num_sessions: c_int = 0;
+        let session_array = (raw.disc_get_sessions)(disc, &mut num_sessions);
+        let incomplete = (raw.disc_get_incomplete_sessions)(disc);
+
+        if !session_array.is_null() && num_sessions > 0 {
+            for s in 0..num_sessions as usize {
+                let session = *session_array.add(s);
+                if session.is_null() {
+                    continue;
+                }
+
+                // Lead-out: einde van de sessie (start_lba = einde trackdata).
+                let mut leadout = ffi::TocEntry::default();
+                (raw.session_get_leadout_entry)(session, &mut leadout);
+
+                let mut tracks = Vec::new();
+                let mut num_tracks: c_int = 0;
+                let track_array = (raw.session_get_tracks)(session, &mut num_tracks);
+                if !track_array.is_null() && num_tracks > 0 {
+                    for t in 0..num_tracks as usize {
+                        let track = *track_array.add(t);
+                        if track.is_null() {
+                            continue;
+                        }
+                        let mut entry = ffi::TocEntry::default();
+                        (raw.track_get_entry)(track, &mut entry);
+                        tracks.push(TocTrack {
+                            session: entry.session as u32 | ((entry.session_msb as u32) << 8),
+                            track_no: entry.point as u32 | ((entry.point_msb as u32) << 8),
+                            start_lba: entry.start_lba,
+                            blocks: entry.track_blocks,
+                            is_data: entry.control & 0x04 != 0,
+                            copy_permitted: entry.control & 0x02 != 0,
+                        });
+                    }
+                }
+
+                // Sessiestart: begin van de eerste track; zonder tracks vallen
+                // we terug op de lead-out.
+                let start = tracks
+                    .first()
+                    .map(|t| t.start_lba)
+                    .unwrap_or(leadout.start_lba);
+
+                sessions_out.push(TocSession {
+                    index: s,
+                    start_lba: start,
+                    end_lba: leadout.start_lba,
+                    tracks,
+                });
+            }
+        }
+
+        (raw.disc_free)(disc);
+        (sessions_out, incomplete)
+    }
 }
 
 fn free_drive_list(st: &mut WorkerState) {
@@ -471,6 +648,43 @@ fn shutdown_lib(state: Option<WorkerState>, notify: &Notifier) {
     free_drive_list(&mut st);
     unsafe { (st.raw.finish)() };
     notify.log(Level::Info, "libburn afgesloten (burn_finish)");
+}
+
+/// Terugvalnamen voor bekende SCSI-profielen als libburn een lege naam geeft.
+pub fn profile_fallback_name(pno: i32) -> &'static str {
+    match pno {
+        0x01 => "Non standard",
+        0x08 => "CD-ROM",
+        0x09 => "CD-R",
+        0x0A => "CD-RW",
+        0x10 => "DVD-ROM",
+        0x11 => "DVD-R sequentieel",
+        0x12 => "DVD-RAM",
+        0x13 => "DVD-RW restricted overwrite",
+        0x14 => "DVD-RW sequentieel",
+        0x15 => "DVD-R DL sequentieel",
+        0x16 => "DVD-R DL layer jump",
+        0x1A => "DVD+RW",
+        0x1B => "DVD+R",
+        0x2B => "DVD+R DL",
+        0x40 => "BD-ROM",
+        0x41 => "BD-R random recording",
+        0x42 => "BD-R sequentieel",
+        0x43 => "BD-RE",
+        0xFFFF => "stdio-bestand",
+        _ => "",
+    }
+}
+
+/// Formatteert een aantal 2048-byte blokken leesbaar (MiB/GiB).
+pub fn format_blocks(blocks: i32) -> String {
+    let bytes = blocks as f64 * 2048.0;
+    let mib = bytes / (1024.0 * 1024.0);
+    if mib >= 1024.0 {
+        format!("{:.2} GiB", mib / 1024.0)
+    } else {
+        format!("{:.1} MiB", mib)
+    }
 }
 
 /// Nederlandse omschrijving van `burn_disc_status`.
