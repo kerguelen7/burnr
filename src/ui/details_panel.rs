@@ -160,7 +160,10 @@ fn drive_details(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry
     // Eiland 2: branden (bronkeuze + voortgang).
     ui.add_space(8.0);
     ui.group(|ui| {
-        ui.label(egui::RichText::new("🔥 Branden").strong());
+        ui.horizontal(|ui| {
+            led(ui, app.burn_led);
+            ui.label(egui::RichText::new("🔥 Branden").strong());
+        });
         burn_section(ui, app, d);
     });
 
@@ -179,6 +182,34 @@ fn chip(ui: &mut egui::Ui, name: &str, ok: bool) {
         egui::RichText::new(format!("✗ {name}")).color(colors::DIM)
     };
     ui.label(text);
+}
+
+/// Status-LED: groen = klaar/geslaagd, oranje = bezig, rood = fout,
+/// grijs = inactief.
+fn led(ui: &mut egui::Ui, state: crate::app::JobLed) {
+    use crate::app::JobLed;
+    let (color, tip) = match state {
+        JobLed::Idle => (colors::DIM, "inactief"),
+        JobLed::Busy => (colors::WARN, "bezig…"),
+        JobLed::Ok => (colors::OK, "klaar — geslaagd"),
+        JobLed::Error => (colors::BAD, "mislukt"),
+    };
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(11.0, 11.0), egui::Sense::hover());
+    ui.painter().circle_filled(rect.center(), 5.0, color);
+    resp.on_hover_text(format!("Status: {tip}"));
+}
+
+/// Formatteert seconden als m:ss of h:mm:ss.
+fn fmt_dur(secs: f64) -> String {
+    let s = secs.max(0.0) as u64;
+    let h = s / 3600;
+    let m = (s % 3600) / 60;
+    let sec = s % 60;
+    if h > 0 {
+        format!("{h}:{m:02}:{sec:02}")
+    } else {
+        format!("{m:02}:{sec:02}")
+    }
 }
 
 fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
@@ -245,7 +276,13 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
                 ));
             }
             ui.horizontal_wrapped(|ui| {
-                chip(ui, "herbeschrijfbaar", media.erasable);
+                // De erasable-bit melden veel drives alleen voor CD; het
+                // SCSI-profiel is de betrouwbare indicatie.
+                chip(
+                    ui,
+                    "herbeschrijfbaar",
+                    media.erasable || crate::worker::profile_is_rewritable(media.profile_no),
+                );
                 if let Some(blocks) = media.read_capacity_blocks {
                     ui.label(format!(
                         "Leesbare capaciteit: {} ({} blokken)",
@@ -388,6 +425,12 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
                 ui.label(format!("fifo {:.0}%", b.fifo_pct));
                 if ui.button("⏹ Annuleren").clicked() {
                     app.cancel_burn();
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label(format!("⏱ verstreken {}", fmt_dur(b.elapsed_secs)));
+                if b.eta_secs > 0.0 {
+                    ui.label(format!("ETA {}", fmt_dur(b.eta_secs)));
                 }
             });
             if b.simulate {

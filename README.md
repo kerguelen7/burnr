@@ -100,11 +100,21 @@ cargo build --release
 - [ ] **Stap 6 — Wissen/formatteren**: losse knoppen voor `burn_disc_erase`
   (snel/volledig) en `burn_disc_format`; de wis-machinery bestaat al in de
   brand-flow.
-- [ ] **Stap 7 — Instellingen volledig koppelen**: snelheidslimieten,
+- [ ] **Stap 7 (optie) — Bestanden toevoegen aan overschrijfbare media
+  (grow)**: bestanden toevoegen aan een beschreven DVD+RW/DVD-RAM/BD-RE met
+  behoud van de oude inhoud. NB: dit is géén multi-session (die media heeft
+  geen sessies; libburn weigert `multi=1` terecht) maar een her-schrijfactie
+  van het bestandssysteem: via `iso_data_source_new_from_file()` +
+  `iso_image_import()` de bestaande ISO-boom inlezen, nieuwe bestanden
+  toevoegen en de image opnieuw schrijven — oude bestandsdata-blokken blijven
+  daarbij fysiek intact waar mogelijk (de aanpak van xorriso's “grow”-modus).
+  Nog niet zeker of dit ingebouwd wordt; de meerwaarde hangt af van de
+  gewenste gebruiksscenario's.
+- [ ] **Stap 8 — Instellingen volledig koppelen**: snelheidslimieten,
   multi-session-gedrag; instellingen persistent opslaan.
-- [ ] **Stap 8 — Afwerking**: favorieten/presets, meerdere stations tegelijk,
+- [ ] **Stap 9 — Afwerking**: favorieten/presets, meerdere stations tegelijk,
   foutopsporing (libburn-meldingen zijn al gekoppeld via de msgs-queue).
-- [ ] **Stap 9 (optioneel) — Gebundelde libburn**: libburn-bron in de repo
+- [ ] **Stap 10 (optioneel) — Gebundelde libburn**: libburn-bron in de repo
   (`vendor/`) en compileren via `build.rs` + `cc`-crate, als cargo-feature
   `bundled` (statisch linken; de handgeschreven FFI in `src/ffi.rs` blijft
   gelijk). Let op licentie: libburn is GPL-2+, dus bij distributie van een

@@ -222,6 +222,10 @@ pub enum Event {
         fifo_pct: f32,
         /// Huidige fase (bijv. "schrijven", "track afsluiten") voor de UI.
         phase: String,
+        /// Verstreken tijd in seconden.
+        elapsed_secs: f64,
+        /// Verwachte resterende tijd in seconden (0 = onbekend).
+        eta_secs: f64,
     },
     BurnDone,
     BurnFailed {
@@ -1264,7 +1268,7 @@ fn burn_files_job(
 
     // Image-layout berekenen en burn_source opvragen (kan even duren).
     notify.log(Level::Info, "Image-layout berekenen (kan even duren)…");
-    let src = unsafe {
+    let src_raw = unsafe {
         let mut src: *mut ffi::BurnSource = std::ptr::null_mut();
         let r = (iso.image_create_burn_source)(image, iso_opts, &mut src);
         drain_iso_msgs(iso, notify);
@@ -1279,6 +1283,24 @@ fn burn_files_job(
         }
         src
     };
+
+    // Wrap de libisofs-bron in een libburn-FIFO (4 MiB): gladstrijkt de
+    // datastroom richting drive én maakt de fifo-vulling in de voortgang
+    // betekenisvol (zonder fifo blijft die permanent 0).
+    let fifo = unsafe { (st.raw.fifo_source_new)(src_raw, 2048, BURN_FIFO_CHUNKS, 0) };
+    unsafe { (st.raw.source_free)(src_raw) }; // fifo heeft een eigen referentie
+    if fifo.is_null() {
+        let msg = "Kan de FIFO om de image-bron niet aanmaken".to_string();
+        notify.log(Level::Error, &msg);
+        unsafe {
+            (iso.write_opts_free)(iso_opts);
+            (iso.image_unref)(image);
+            (st.raw.drive_release)(di.drive, 0);
+        }
+        notify.send(Event::BurnFailed { index, error: msg });
+        return;
+    }
+    let src = fifo;
 
     // Grootte via de get_size-callback van de burn_source.
     let size = unsafe { burn_source_get_size(src) };
@@ -1612,10 +1634,31 @@ unsafe fn make_write_opts(
         }
         (raw.write_opts_set_perform_opc)(opts, 0);
         (raw.write_opts_set_simulate)(opts, s.simulate as c_int);
-        let multi = match s.multi_session {
+        let mut multi = match s.multi_session {
             MultiSession::KeepOpen => 1,
             _ => 0,
         };
+        // Overwritbare media (DVD+RW, DVD-RAM, BD-RE, geformatteerde DVD-RW)
+        // ondersteunt geen appendable-sessies — die media is inherent altijd
+        // beschrijfbaar. libburn weigert anders het hele job
+        // ("multi session capability lacking"); de vlag is daar zinloos.
+        if multi == 1 {
+            let mut profile_no: c_int = 0;
+            let mut pname = [0 as c_char; 80];
+            let _ = (raw.disc_get_profile)(drive, &mut profile_no, pname.as_mut_ptr());
+            if profile_is_overwritable(profile_no) {
+                notify.log(
+                    Level::Info,
+                    format!(
+                        "Media (profiel 0x{:02X}) is direct overschrijfbaar — \
+                         multi-session is niet van toepassing; de media blijft \
+                         altijd beschrijfbaar",
+                        profile_no
+                    ),
+                );
+                multi = 0;
+            }
+        }
         (raw.write_opts_set_multi)(opts, multi);
         (raw.write_opts_set_underrun_proof)(opts, s.underrun_proof as c_int);
         if s.overburn {
@@ -1782,8 +1825,16 @@ unsafe fn run_write_poll(
         ) && prog.sectors > 0
             && last_progress.elapsed() >= Duration::from_millis(200)
         {
-            let secs = started.elapsed().as_secs_f64().max(0.001);
+            let elapsed = started.elapsed().as_secs_f64();
+            let secs = elapsed.max(0.001);
             let kbps = (prog.sector as f64 * 2048.0) / secs / 1000.0;
+            // ETA: verstreken tijd × (resterend / gedaan), alleen bij echte
+            // voortgang (sector > 0 en nog niet klaar).
+            let eta = if prog.sector > 0 && prog.sector < prog.sectors {
+                elapsed * ((prog.sectors - prog.sector) as f64 / prog.sector as f64)
+            } else {
+                0.0
+            };
             let buffer_pct = if prog.buffer_capacity > 0 {
                 ((prog.buffer_capacity - prog.buffer_available) as f32
                     / prog.buffer_capacity as f32)
@@ -1800,6 +1851,8 @@ unsafe fn run_write_poll(
                 buffer_pct,
                 fifo_pct,
                 phase: drive_status_label(ds).to_string(),
+                elapsed_secs: elapsed,
+                eta_secs: eta,
             });
             last_progress = std::time::Instant::now();
         }

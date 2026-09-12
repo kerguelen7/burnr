@@ -35,6 +35,16 @@ pub enum BurnSourceKind {
     FileSet,
 }
 
+/// Status-LED voor het brand-eiland: houdt de uitkomst van de laatste job
+/// vast tot de volgende start.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum JobLed {
+    Idle,
+    Busy,
+    Ok,
+    Error,
+}
+
 /// Lopende schijfkopie.
 #[derive(Clone, Debug)]
 pub struct ActiveRead {
@@ -65,6 +75,10 @@ pub struct ActiveBurn {
     pub simulate: bool,
     /// Huidige fase ("schrijven", "track afsluiten", …).
     pub phase: String,
+    /// Verstreken tijd in seconden.
+    pub elapsed_secs: f64,
+    /// Verwachte resterende tijd in seconden (0 = onbekend).
+    pub eta_secs: f64,
 }
 
 impl ActiveBurn {
@@ -100,6 +114,8 @@ pub struct App {
     pub burn_files_size: u64,
     /// Volumenaam van de samen te stellen image.
     pub volume_id: String,
+    /// Status-LED van het brand-eiland.
+    pub burn_led: JobLed,
     pub settings: BurnSettings,
     /// Drives exclusief openen (O_EXCL)? Uitzetten bij automount-conflicten.
     pub exclusive_open: bool,
@@ -143,6 +159,7 @@ impl App {
             burn_files: Vec::new(),
             burn_files_size: 0,
             volume_id: format!("Libburn{}", chrono::Local::now().format("%Y%m%d")),
+            burn_led: JobLed::Idle,
             settings: BurnSettings::default(),
             exclusive_open: true,
             cmd_tx,
@@ -468,6 +485,7 @@ impl App {
                 total_sectors,
                 simulate,
             } => {
+                self.burn_led = JobLed::Busy;
                 self.active_burn = Some(ActiveBurn {
                     index,
                     sector: 0,
@@ -477,6 +495,8 @@ impl App {
                     fifo_pct: 0.0,
                     simulate,
                     phase: "starten…".to_string(),
+                    elapsed_secs: 0.0,
+                    eta_secs: 0.0,
                 });
             }
             Event::BurnProgress {
@@ -487,6 +507,8 @@ impl App {
                 buffer_pct,
                 fifo_pct,
                 phase,
+                elapsed_secs,
+                eta_secs,
             } => {
                 if let Some(b) = self.active_burn.as_mut() {
                     if b.index == index {
@@ -496,10 +518,13 @@ impl App {
                         b.buffer_pct = buffer_pct;
                         b.fifo_pct = fifo_pct;
                         b.phase = phase;
+                        b.elapsed_secs = elapsed_secs;
+                        b.eta_secs = eta_secs;
                     }
                 }
             }
             Event::BurnDone => {
+                self.burn_led = JobLed::Ok;
                 self.active_burn = None;
                 // Bestandenlijst wissen na een geslaagde brand — een nieuwe
                 // run begint met een schone selectie — en het volumelabel door
@@ -515,12 +540,14 @@ impl App {
                 self.bump_volume_label();
             }
             Event::BurnFailed { index, error } => {
+                self.burn_led = JobLed::Error;
                 self.active_burn = None;
                 if let Some(d) = self.drives.get_mut(index) {
                     d.inspect_error = Some(error);
                 }
             }
             Event::BurnCancelled => {
+                self.burn_led = JobLed::Idle;
                 self.active_burn = None;
             }
             Event::WorkerStopped => {}
