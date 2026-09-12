@@ -69,84 +69,107 @@ fn lib_failed_card(ui: &mut egui::Ui, app: &mut App, error: &str) {
 }
 
 fn drive_details(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
-    ui.heading(format!("📀 {}", d.display_name()));
-    ui.weak(format!(
-        "Firmware-revisie: {}",
-        if d.revision.is_empty() {
-            "—"
-        } else {
-            &d.revision
-        }
-    ));
-    ui.separator();
+    // Compacte kop: naam + apparaatpad; technische details zijn inklapbaar.
+    ui.horizontal(|ui| {
+        ui.heading(format!("📀 {}", d.display_name()));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(
+                egui::RichText::new(if d.adr.is_empty() {
+                    "(adres onbekend)".to_string()
+                } else {
+                    d.adr.clone()
+                })
+                .small()
+                .color(colors::DIM),
+            );
+        });
+    });
 
-    egui::Grid::new("drive_info_grid")
-        .num_columns(2)
-        .spacing([16.0, 4.0])
+    egui::CollapsingHeader::new(egui::RichText::new("⚙ Technische details").small())
+        .default_open(false)
         .show(ui, |ui| {
-            ui.strong("Apparaat");
-            ui.label(if d.adr.is_empty() {
-                "(adres onbekend)".to_string()
-            } else {
-                d.adr.clone()
+            ui.weak(format!(
+                "Firmware-revisie: {}",
+                if d.revision.is_empty() {
+                    "—"
+                } else {
+                    &d.revision
+                }
+            ));
+            egui::Grid::new("drive_info_grid")
+                .num_columns(2)
+                .spacing([16.0, 4.0])
+                .show(ui, |ui| {
+                    ui.strong("Buffer");
+                    ui.label(if d.buffer_size_kb > 0 {
+                        format!("{} KB", d.buffer_size_kb)
+                    } else {
+                        "—".to_string()
+                    });
+                    ui.end_row();
+
+                    ui.strong("TAO-bloktypen");
+                    ui.monospace(format!("0x{:04X}", d.tao_block_types as u16));
+                    ui.end_row();
+
+                    ui.strong("SAO-bloktypen");
+                    ui.monospace(format!("0x{:04X}", d.sao_block_types as u16));
+                    ui.end_row();
+
+                    ui.strong("RAW-bloktypen");
+                    ui.monospace(format!("0x{:04X}", d.raw_block_types as u16));
+                    ui.end_row();
+
+                    ui.strong("Packet-bloktypen");
+                    ui.monospace(format!("0x{:04X}", d.packet_block_types as u16));
+                    ui.end_row();
+                });
+
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new("Mogelijkheden").strong());
+            ui.horizontal_wrapped(|ui| {
+                ui.label(egui::RichText::new("lezen:").color(colors::DIM));
+                for (name, ok) in [
+                    ("CD-R", d.caps.read_cdr),
+                    ("CD-RW", d.caps.read_cdrw),
+                    ("DVD-R", d.caps.read_dvdr),
+                    ("DVD-RAM", d.caps.read_dvdram),
+                    ("DVD-ROM", d.caps.read_dvdrom),
+                    ("C2-fouten", d.caps.c2_errors),
+                ] {
+                    chip(ui, name, ok);
+                }
             });
-            ui.end_row();
-
-            ui.strong("Buffer");
-            ui.label(if d.buffer_size_kb > 0 {
-                format!("{} KB", d.buffer_size_kb)
-            } else {
-                "—".to_string()
+            ui.horizontal_wrapped(|ui| {
+                ui.label(egui::RichText::new("schrijven:").color(colors::DIM));
+                for (name, ok) in [
+                    ("CD-R", d.caps.write_cdr),
+                    ("CD-RW", d.caps.write_cdrw),
+                    ("DVD-R", d.caps.write_dvdr),
+                    ("DVD-RAM", d.caps.write_dvdram),
+                ] {
+                    chip(ui, name, ok);
+                }
+                chip(ui, "simulatie", d.caps.write_simulate);
             });
-            ui.end_row();
-
-            ui.strong("TAO-bloktypen");
-            ui.monospace(format!("0x{:04X}", d.tao_block_types as u16));
-            ui.end_row();
-
-            ui.strong("SAO-bloktypen");
-            ui.monospace(format!("0x{:04X}", d.sao_block_types as u16));
-            ui.end_row();
-
-            ui.strong("RAW-bloktypen");
-            ui.monospace(format!("0x{:04X}", d.raw_block_types as u16));
-            ui.end_row();
-
-            ui.strong("Packet-bloktypen");
-            ui.monospace(format!("0x{:04X}", d.packet_block_types as u16));
-            ui.end_row();
         });
 
     ui.add_space(8.0);
-    ui.label(egui::RichText::new("Mogelijkheden").strong());
-    ui.horizontal_wrapped(|ui| {
-        ui.label(egui::RichText::new("lezen:").color(colors::DIM));
-        for (name, ok) in [
-            ("CD-R", d.caps.read_cdr),
-            ("CD-RW", d.caps.read_cdrw),
-            ("DVD-R", d.caps.read_dvdr),
-            ("DVD-RAM", d.caps.read_dvdram),
-            ("DVD-ROM", d.caps.read_dvdrom),
-            ("C2-fouten", d.caps.c2_errors),
-        ] {
-            chip(ui, name, ok);
-        }
-    });
-    ui.horizontal_wrapped(|ui| {
-        ui.label(egui::RichText::new("schrijven:").color(colors::DIM));
-        for (name, ok) in [
-            ("CD-R", d.caps.write_cdr),
-            ("CD-RW", d.caps.write_cdrw),
-            ("DVD-R", d.caps.write_dvdr),
-            ("DVD-RAM", d.caps.write_dvdram),
-        ] {
-            chip(ui, name, ok);
-        }
-        chip(ui, "simulatie", d.caps.write_simulate);
+    media_card(ui, app, d);
+
+    // Eiland 2: branden (bronkeuze + voortgang).
+    ui.add_space(8.0);
+    ui.group(|ui| {
+        ui.label(egui::RichText::new("🔥 Branden").strong());
+        burn_section(ui, app, d);
     });
 
-    ui.add_space(12.0);
-    media_card(ui, app, d);
+    // Eiland 3: schijfkopie lezen.
+    ui.add_space(8.0);
+    ui.group(|ui| {
+        ui.label(egui::RichText::new("💾 Schijfkopie (data)").strong());
+        read_section(ui, app, d);
+    });
 }
 
 fn chip(ui: &mut egui::Ui, name: &str, ok: bool) {
@@ -235,10 +258,6 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
             ui.add_space(4.0);
             toc_section(ui, media);
 
-            ui.add_space(6.0);
-            ui.separator();
-            read_section(ui, app, d);
-
             if media.speeds.is_empty() {
                 ui.weak("Geen snelheidsinformatie beschikbaar.");
             } else {
@@ -289,14 +308,20 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
 
 /// Schijfkopie-sectie: pad + startknop, of voortgang + annuleren tijdens het lezen.
 fn read_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
-    ui.label(egui::RichText::new("Schijfkopie (data)").strong());
-
     if let Some(r) = app.active_read.clone() {
         if r.index == d.index {
             ui.add(egui::ProgressBar::new(r.fraction()).show_percentage());
             ui.horizontal(|ui| {
                 ui.label(format!("{} / {} blokken", r.blocks_done, r.total_blocks));
                 ui.label(format!("{:.0} kB/s", r.kbps));
+                if ui.button("📄 Kies…").clicked() {
+                    if let Some(p) = rfd::FileDialog::new()
+                        .set_file_name("kopie.iso")
+                        .save_file()
+                    {
+                        app.read_path = p.display().to_string();
+                    }
+                }
                 if ui.button("⏹ Annuleren").clicked() {
                     app.cancel_read();
                 }
@@ -311,8 +336,16 @@ fn read_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
         ui.add(
             egui::TextEdit::singleline(&mut app.read_path)
                 .hint_text("~/kopie.iso")
-                .desired_width(220.0),
+                .desired_width(180.0),
         );
+        if ui.button("📄 Kies…").clicked() {
+            if let Some(p) = rfd::FileDialog::new()
+                .set_file_name("kopie.iso")
+                .save_file()
+            {
+                app.read_path = p.display().to_string();
+            }
+        }
         let ready = app.scan_state == ScanState::Done && app.busy_drive.is_none();
         if ui
             .add_enabled(ready, egui::Button::new("💾 Kopie maken"))
@@ -325,6 +358,179 @@ fn read_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
     ui.weak(
         "Leest alle datablokken (2048 B) naar één bestand — geschikt voor \
          CD/DVD/BD-data, niet voor CD-audio.",
+    );
+}
+
+/// Brand-sectie: ISO-pad + startknop, of voortgang + annuleren tijdens het branden.
+/// Brand-sectie: bronkeuze (ISO-bestand of bestandsselectie), startknop en
+/// voortgang met annuleren.
+fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
+    use crate::app::BurnSourceKind;
+
+    if let Some(b) = app.active_burn.clone() {
+        if b.index == d.index {
+            let frac = b.fraction();
+            ui.add(egui::ProgressBar::new(frac).show_percentage());
+            // De dataphase kan op 100% eindigen terwijl de drive nog bezig is
+            // met lead-out/track-afsluiting; de fase maakt dat zichtbaar.
+            if frac >= 1.0 {
+                ui.colored_label(
+                    colors::WARN,
+                    format!("100% geschreven — drive is nog bezig: {}…", b.phase),
+                );
+            } else {
+                ui.label(format!("Fase: {}", b.phase));
+            }
+            ui.horizontal(|ui| {
+                ui.label(format!("sector {} / {}", b.sector, b.sectors));
+                ui.label(format!("{:.0} kB/s", b.kbps));
+                ui.label(format!("buffer {:.0}%", b.buffer_pct));
+                ui.label(format!("fifo {:.0}%", b.fifo_pct));
+                if ui.button("⏹ Annuleren").clicked() {
+                    app.cancel_burn();
+                }
+            });
+            if b.simulate {
+                ui.colored_label(
+                    colors::WARN,
+                    "SIMULATIE — er wordt niets definitief geschreven",
+                );
+            }
+        } else {
+            ui.weak("Er draait momenteel een brandjob op een ander station.");
+        }
+        return;
+    }
+
+    let media_ok = d
+        .media
+        .as_ref()
+        .is_some_and(|m| matches!(m.disc_status, DiscStatus::Blank | DiscStatus::Appendable));
+    let ready = app.scan_state == ScanState::Done
+        && app.busy_drive.is_none()
+        && app.active_read.is_none()
+        && media_ok;
+
+    // Bronkeuze: ISO-bestand of eigen bestandsselectie (libisofs).
+    ui.horizontal(|ui| {
+        ui.label("Bron:");
+        ui.radio_value(
+            &mut app.burn_source_kind,
+            BurnSourceKind::IsoFile,
+            "ISO-bestand",
+        );
+        ui.radio_value(
+            &mut app.burn_source_kind,
+            BurnSourceKind::FileSet,
+            "Bestanden",
+        );
+    });
+
+    match app.burn_source_kind {
+        BurnSourceKind::IsoFile => {
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut app.burn_path)
+                        .hint_text("~/image.iso")
+                        .desired_width(180.0),
+                );
+                if ui.button("📄 Kies…").clicked() {
+                    if let Some(p) = rfd::FileDialog::new()
+                        .add_filter("ISO-images", &["iso", "img"])
+                        .add_filter("Alle bestanden", &["*"])
+                        .pick_file()
+                    {
+                        app.burn_path = p.display().to_string();
+                    }
+                }
+                if ui
+                    .add_enabled(ready, egui::Button::new("🔥 Branden"))
+                    .clicked()
+                {
+                    let path = app.burn_path.clone();
+                    app.request_burn(d.index, path);
+                }
+            });
+        }
+        BurnSourceKind::FileSet => {
+            ui.horizontal(|ui| {
+                if ui.button("➕ Bestanden…").clicked() {
+                    // pick_files(): meerdere bestanden kiezen met Ctrl/Shift.
+                    if let Some(paths) = rfd::FileDialog::new().pick_files() {
+                        for p in paths {
+                            app.add_burn_file(p.display().to_string());
+                        }
+                    }
+                }
+                if ui.button("📁 Map…").clicked() {
+                    if let Some(p) = rfd::FileDialog::new().pick_folder() {
+                        app.add_burn_file(p.display().to_string());
+                    }
+                }
+            });
+
+            if app.burn_files.is_empty() {
+                ui.weak("Nog geen bestanden gekozen — voeg bestanden of mappen toe.");
+            } else {
+                egui::ScrollArea::vertical()
+                    .max_height(160.0)
+                    .show(ui, |ui| {
+                        let files = app.burn_files.clone();
+                        for (i, p) in files.iter().enumerate() {
+                            ui.horizontal(|ui| {
+                                if ui.small_button("✖").clicked() {
+                                    app.remove_burn_file(i);
+                                }
+                                ui.label(egui::RichText::new(p).small());
+                            });
+                        }
+                    });
+                ui.label(format!(
+                    "≈ {} (schatting, {} item(s))",
+                    crate::worker::format_blocks(((app.burn_files_size + 2047) / 2048) as i32),
+                    app.burn_files.len()
+                ));
+            }
+
+            ui.horizontal(|ui| {
+                ui.label("Volume-naam:");
+                ui.add(egui::TextEdit::singleline(&mut app.volume_id).desired_width(160.0));
+                if ui
+                    .add_enabled(
+                        ready && !app.burn_files.is_empty(),
+                        egui::Button::new("🔥 Samenstellen & branden"),
+                    )
+                    .clicked()
+                {
+                    app.request_burn_files(d.index);
+                }
+            });
+            ui.weak(
+                "Maakt een ISO9660-image (Rock Ridge + Joliet, ISO-niveau 3) met \
+                 libisofs en brandt die direct — geen tussenbestand.",
+            );
+        }
+    }
+
+    if !media_ok {
+        ui.weak("(inspecteer eerst; branden vereist lege of onvolledige media)");
+    }
+    let media_cant_simulate = d
+        .media
+        .as_ref()
+        .is_some_and(|m| crate::worker::profile_cant_simulate(m.profile_no));
+    if app.settings.simulate && (!d.caps.write_simulate || media_cant_simulate) {
+        ui.colored_label(
+            colors::WARN,
+            "⚠ Simulatie staat aan, maar deze drive/media kan niet simuleren \
+             (alle BD-media, DVD-R DL en overbeschrijfbare media kunnen nooit \
+             simuleren). Zet “Simulatie” uit in Instellingen → Branden — \
+             let op: zonder simulatie wordt er écht geschreven.",
+        );
+    }
+    ui.weak(
+        "Gebruikt de instellingen rechts: snelheid, schrijfmodus, simulatie, \
+         multi-session, padding, wissen vooraf.",
     );
 }
 

@@ -28,6 +28,13 @@ pub enum ScanState {
     Failed { error: String },
 }
 
+/// Bron voor het branden: een ISO-bestand of een eigen bestandsselectie.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BurnSourceKind {
+    IsoFile,
+    FileSet,
+}
+
 /// Lopende schijfkopie.
 #[derive(Clone, Debug)]
 pub struct ActiveRead {
@@ -46,6 +53,29 @@ impl ActiveRead {
     }
 }
 
+/// Lopend brandjob.
+#[derive(Clone, Debug)]
+pub struct ActiveBurn {
+    pub index: usize,
+    pub sector: i32,
+    pub sectors: i32,
+    pub kbps: f64,
+    pub buffer_pct: f32,
+    pub fifo_pct: f32,
+    pub simulate: bool,
+    /// Huidige fase ("schrijven", "track afsluiten", …).
+    pub phase: String,
+}
+
+impl ActiveBurn {
+    pub fn fraction(&self) -> f32 {
+        if self.sectors <= 0 {
+            return 0.0;
+        }
+        (self.sector as f32 / self.sectors as f32).clamp(0.0, 1.0)
+    }
+}
+
 pub struct App {
     pub log: LogStore,
     pub lib_state: LibState,
@@ -58,6 +88,18 @@ pub struct App {
     pub active_read: Option<ActiveRead>,
     /// Pad voor de volgende schijfkopie.
     pub read_path: String,
+    /// Lopend brandjob (één tegelijk).
+    pub active_burn: Option<ActiveBurn>,
+    /// Pad naar het ISO-bestand om te branden.
+    pub burn_path: String,
+    /// Bronkeuze voor het branden.
+    pub burn_source_kind: BurnSourceKind,
+    /// Gekozen bestanden/mappen voor een data-image (stap 5, libisofs).
+    pub burn_files: Vec<String>,
+    /// Geschatte totale grootte van de selectie (bytes).
+    pub burn_files_size: u64,
+    /// Volumenaam van de samen te stellen image.
+    pub volume_id: String,
     pub settings: BurnSettings,
     /// Drives exclusief openen (O_EXCL)? Uitzetten bij automount-conflicten.
     pub exclusive_open: bool,
@@ -95,6 +137,12 @@ impl App {
             busy_drive: None,
             active_read: None,
             read_path: String::new(),
+            active_burn: None,
+            burn_path: String::new(),
+            burn_source_kind: BurnSourceKind::IsoFile,
+            burn_files: Vec::new(),
+            burn_files_size: 0,
+            volume_id: format!("Libburn{}", chrono::Local::now().format("%Y%m%d")),
             settings: BurnSettings::default(),
             exclusive_open: true,
             cmd_tx,
@@ -132,7 +180,7 @@ impl App {
     }
 
     pub fn request_inspect(&mut self, index: usize) {
-        if self.busy_drive.is_some() || self.active_read.is_some() {
+        if self.busy_drive.is_some() || self.active_read.is_some() || self.active_burn.is_some() {
             return;
         }
         self.log.push(
@@ -163,7 +211,7 @@ impl App {
     }
 
     pub fn request_read(&mut self, index: usize, path: String) {
-        if self.active_read.is_some() || self.busy_drive.is_some() {
+        if self.active_read.is_some() || self.busy_drive.is_some() || self.active_burn.is_some() {
             return;
         }
         let expanded = expand_home(&path);
@@ -191,6 +239,141 @@ impl App {
                 .push(Level::Info, "Kopie annuleren aangevraagd".to_string());
             self.send(Command::CancelRead);
         }
+    }
+
+    pub fn request_burn(&mut self, index: usize, path: String) {
+        if self.active_burn.is_some() || self.active_read.is_some() || self.busy_drive.is_some() {
+            return;
+        }
+        let expanded = expand_home(&path);
+        if expanded.trim().is_empty() {
+            self.log
+                .push(Level::Warning, "Geen ISO-bestand opgegeven".to_string());
+            return;
+        }
+        if !std::path::Path::new(&expanded).is_file() {
+            self.log.push(
+                Level::Warning,
+                format!("ISO-bestand bestaat niet: `{}`", expanded),
+            );
+            return;
+        }
+        self.log.push(
+            Level::Info,
+            format!(
+                "Brandjob aangevraagd voor station {index} met `{}`",
+                expanded
+            ),
+        );
+        self.send(Command::BurnDisc {
+            index,
+            path: expanded,
+            settings: self.settings.clone(),
+        });
+    }
+
+    pub fn cancel_burn(&mut self) {
+        if self.active_burn.is_some() {
+            self.log
+                .push(Level::Info, "Brandjob annuleren aangevraagd".to_string());
+            self.send(Command::CancelBurn);
+        }
+    }
+
+    /// Voeg een bestand/map toe aan de data-selectie (geen duplicaten).
+    pub fn add_burn_file(&mut self, path: String) {
+        if path.is_empty() || self.burn_files.contains(&path) {
+            return;
+        }
+        self.burn_files.push(path);
+        self.recompute_burn_files_size();
+    }
+
+    pub fn remove_burn_file(&mut self, idx: usize) {
+        if idx < self.burn_files.len() {
+            self.burn_files.remove(idx);
+            self.recompute_burn_files_size();
+        }
+    }
+
+    /// Geschatte grootte van de selectie (recursief, met een tellingslimiet
+    /// zodat de UI niet blokkeert op reusachtige bomen).
+    fn recompute_burn_files_size(&mut self) {
+        const MAX_FILES: usize = 100_000;
+        fn walk(p: &std::path::Path, total: &mut u64, count: &mut usize) {
+            if *count >= MAX_FILES {
+                return;
+            }
+            match std::fs::symlink_metadata(p) {
+                Ok(md) if md.is_dir() => {
+                    if let Ok(rd) = std::fs::read_dir(p) {
+                        for e in rd.flatten() {
+                            walk(&e.path(), total, count);
+                        }
+                    }
+                }
+                Ok(md) => {
+                    *total += md.len();
+                    *count += 1;
+                }
+                Err(_) => {}
+            }
+        }
+        let mut total = 0u64;
+        let mut count = 0usize;
+        for p in &self.burn_files {
+            walk(std::path::Path::new(p), &mut total, &mut count);
+        }
+        self.burn_files_size = total;
+    }
+
+    /// Zet het volumelabel door naar het volgende nummer van vandaag
+    /// (LibburnYYYYMMDD → LibburnYYYYMMDD-2 → -3 …). Een door de gebruiker
+    /// zelf ingevulde naam blijft onaangeroerd.
+    fn bump_volume_label(&mut self) {
+        let today = chrono::Local::now().format("%Y%m%d").to_string();
+        let prefix = format!("Libburn{today}");
+        let cur = self.volume_id.trim();
+        if cur == prefix {
+            self.volume_id = format!("{prefix}-2");
+        } else if let Some(rest) = cur.strip_prefix(&format!("{prefix}-")) {
+            if let Ok(n) = rest.parse::<u32>() {
+                self.volume_id = format!("{prefix}-{}", n + 1);
+            }
+        }
+    }
+
+    pub fn request_burn_files(&mut self, index: usize) {
+        if self.active_burn.is_some() || self.active_read.is_some() || self.busy_drive.is_some() {
+            return;
+        }
+        if self.burn_files.is_empty() {
+            self.log.push(
+                Level::Warning,
+                "Geen bestanden gekozen om te branden".to_string(),
+            );
+            return;
+        }
+        let volume = if self.volume_id.trim().is_empty() {
+            format!("Libburn{}", chrono::Local::now().format("%Y%m%d"))
+        } else {
+            self.volume_id.trim().to_string()
+        };
+        self.log.push(
+            Level::Info,
+            format!(
+                "Data-image branden aangevraagd voor station {index} — {} item(s), \
+                 ≈ {}",
+                self.burn_files.len(),
+                crate::worker::format_blocks(((self.burn_files_size + 2047) / 2048) as i32)
+            ),
+        );
+        self.send(Command::BurnFiles {
+            index,
+            paths: self.burn_files.clone(),
+            volume_id: volume,
+            settings: self.settings.clone(),
+        });
     }
 
     fn handle_event(&mut self, ev: Event) {
@@ -280,6 +463,66 @@ impl App {
             Event::ReadCancelled => {
                 self.active_read = None;
             }
+            Event::BurnStarted {
+                index,
+                total_sectors,
+                simulate,
+            } => {
+                self.active_burn = Some(ActiveBurn {
+                    index,
+                    sector: 0,
+                    sectors: total_sectors,
+                    kbps: 0.0,
+                    buffer_pct: 0.0,
+                    fifo_pct: 0.0,
+                    simulate,
+                    phase: "starten…".to_string(),
+                });
+            }
+            Event::BurnProgress {
+                index,
+                sector,
+                sectors,
+                kbps,
+                buffer_pct,
+                fifo_pct,
+                phase,
+            } => {
+                if let Some(b) = self.active_burn.as_mut() {
+                    if b.index == index {
+                        b.sector = sector;
+                        b.sectors = sectors;
+                        b.kbps = kbps;
+                        b.buffer_pct = buffer_pct;
+                        b.fifo_pct = fifo_pct;
+                        b.phase = phase;
+                    }
+                }
+            }
+            Event::BurnDone => {
+                self.active_burn = None;
+                // Bestandenlijst wissen na een geslaagde brand — een nieuwe
+                // run begint met een schone selectie — en het volumelabel door
+                // zetten naar het volgende nummer van vandaag.
+                if !self.burn_files.is_empty() {
+                    self.burn_files.clear();
+                    self.burn_files_size = 0;
+                    self.log.push(
+                        Level::Info,
+                        "Bestandenlijst gewist na geslaagde brand".to_string(),
+                    );
+                }
+                self.bump_volume_label();
+            }
+            Event::BurnFailed { index, error } => {
+                self.active_burn = None;
+                if let Some(d) = self.drives.get_mut(index) {
+                    d.inspect_error = Some(error);
+                }
+            }
+            Event::BurnCancelled => {
+                self.active_burn = None;
+            }
             Event::WorkerStopped => {}
         }
     }
@@ -297,7 +540,8 @@ impl eframe::App for App {
         let busy = matches!(self.lib_state, LibState::Loading)
             || self.scan_state == ScanState::Scanning
             || self.busy_drive.is_some()
-            || self.active_read.is_some();
+            || self.active_read.is_some()
+            || self.active_burn.is_some();
         if busy {
             ctx.request_repaint_after(Duration::from_millis(80));
         }

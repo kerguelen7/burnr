@@ -47,7 +47,7 @@ pub enum MultiSession {
 impl MultiSession {
     pub fn label(self) -> &'static str {
         match self {
-            MultiSession::Auto => "Auto (libburn bepaalt)",
+            MultiSession::Auto => "Auto (media wordt afgesloten)",
             MultiSession::KeepOpen => "Open laten (multi-session)",
             MultiSession::Close => "Afsluiten (finalize)",
         }
@@ -73,6 +73,9 @@ pub struct BurnSettings {
     pub blank_mode: BlankMode,
     /// Schijf uitwerpen na afloop.
     pub eject_after: bool,
+    /// Bij bestands-branden: originele bestandsdatums behouden i.p.v. de
+    /// opnametijd (Rock Ridge + directoryrecords).
+    pub keep_timestamps: bool,
 }
 
 impl Default for BurnSettings {
@@ -89,6 +92,7 @@ impl Default for BurnSettings {
             blank_first: false,
             blank_mode: BlankMode::Fast,
             eject_after: true,
+            keep_timestamps: true,
         }
     }
 }

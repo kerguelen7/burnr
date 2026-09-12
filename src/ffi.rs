@@ -41,6 +41,36 @@ pub struct BurnTrack {
     _private: [u8; 0],
 }
 
+/// Opaque handle naar `struct burn_source` (databron voor een track).
+#[repr(C)]
+pub struct BurnSource {
+    _private: [u8; 0],
+}
+
+/// Opaque handle naar `struct burn_write_opts`.
+#[repr(C)]
+pub struct BurnWriteOpts {
+    _private: [u8; 0],
+}
+
+/// `BURN_POS_END` — positiecode voor "achteraan toevoegen".
+pub const BURN_POS_END: c_uint = 100;
+/// `BURN_MODE1` — datatrack met 2048 bytes gebruikersdata per sector.
+pub const BURN_MODE1: c_int = 1 << 2;
+/// `BURN_BLOCK_MODE1` — bloktype bij schrijfmodus TAO voor datatracks.
+pub const BURN_BLOCK_MODE1: c_int = 256;
+/// `BURN_BLOCK_SAO` — bloktype bij schrijfmodus SAO.
+pub const BURN_BLOCK_SAO: c_int = 16384;
+/// `BURN_WRITE_TAO` / `BURN_WRITE_SAO` / `BURN_WRITE_NONE` (enum burn_write_types).
+pub const BURN_WRITE_TAO: c_int = 1;
+pub const BURN_WRITE_SAO: c_int = 2;
+pub const BURN_WRITE_RAW: c_int = 3;
+pub const BURN_WRITE_NONE: c_int = 4;
+/// `BURN_MSGS_MESSAGE_LEN` — minimale buffer voor `burn_msgs_obtain`.
+pub const BURN_MSGS_MESSAGE_LEN: usize = 4096;
+/// `BURN_REASONS_LEN` — buffer voor afwijzingsredenen van de precheck.
+pub const BURN_REASONS_LEN: usize = 4096;
+
 /// `struct burn_drive_info` uit libburn.h.
 ///
 /// De 11 capability-bitvelden uit de C-header worden door GCC (little-endian,
@@ -238,6 +268,52 @@ pub struct RawLibburn {
         *mut c_longlong,
         c_int,
     ) -> c_int,
+    // Stap 4: disc-model, bronnen, write-opts, branden/wissen en meldingen.
+    pub disc_create: unsafe extern "C" fn() -> *mut BurnDisc,
+    pub session_create: unsafe extern "C" fn() -> *mut BurnSession,
+    pub session_free: unsafe extern "C" fn(*mut BurnSession),
+    pub disc_add_session: unsafe extern "C" fn(*mut BurnDisc, *mut BurnSession, c_uint) -> c_int,
+    pub track_create: unsafe extern "C" fn() -> *mut BurnTrack,
+    pub track_free: unsafe extern "C" fn(*mut BurnTrack),
+    pub session_add_track: unsafe extern "C" fn(*mut BurnSession, *mut BurnTrack, c_uint) -> c_int,
+    pub track_set_source: unsafe extern "C" fn(*mut BurnTrack, *mut BurnSource) -> c_int,
+    pub source_free: unsafe extern "C" fn(*mut BurnSource),
+    pub file_source_new: unsafe extern "C" fn(*const c_char, *const c_char) -> *mut BurnSource,
+    pub fifo_source_new:
+        unsafe extern "C" fn(*mut BurnSource, c_int, c_int, c_int) -> *mut BurnSource,
+    pub fifo_inquire_status:
+        unsafe extern "C" fn(*mut BurnSource, *mut c_int, *mut c_int, *mut *const c_char) -> c_int,
+    pub track_set_size: unsafe extern "C" fn(*mut BurnTrack, c_longlong) -> c_int,
+    pub track_define_data: unsafe extern "C" fn(*mut BurnTrack, c_int, c_int, c_int, c_int),
+    pub write_opts_new: unsafe extern "C" fn(*mut BurnDrive) -> *mut BurnWriteOpts,
+    pub write_opts_free: unsafe extern "C" fn(*mut BurnWriteOpts),
+    pub write_opts_set_perform_opc: unsafe extern "C" fn(*mut BurnWriteOpts, c_int),
+    pub write_opts_set_simulate: unsafe extern "C" fn(*mut BurnWriteOpts, c_int) -> c_int,
+    pub write_opts_set_multi: unsafe extern "C" fn(*mut BurnWriteOpts, c_int),
+    pub write_opts_set_underrun_proof: unsafe extern "C" fn(*mut BurnWriteOpts, c_int),
+    pub write_opts_set_force: unsafe extern "C" fn(*mut BurnWriteOpts, c_int),
+    pub write_opts_set_write_type: unsafe extern "C" fn(*mut BurnWriteOpts, c_int, c_int) -> c_int,
+    pub write_opts_auto_write_type:
+        unsafe extern "C" fn(*mut BurnWriteOpts, *mut BurnDisc, *mut c_char, c_int) -> c_int,
+    pub precheck_write:
+        unsafe extern "C" fn(*mut BurnWriteOpts, *mut BurnDisc, *mut c_char, c_int) -> c_int,
+    pub disc_write: unsafe extern "C" fn(*mut BurnWriteOpts, *mut BurnDisc),
+    pub disc_erase: unsafe extern "C" fn(*mut BurnDrive, c_int),
+    pub drive_set_speed: unsafe extern "C" fn(*mut BurnDrive, c_int, c_int),
+    pub drive_cancel: unsafe extern "C" fn(*mut BurnDrive),
+    pub drive_wrote_well: unsafe extern "C" fn(*mut BurnDrive) -> c_int,
+    pub drive_re_assess: unsafe extern "C" fn(*mut BurnDrive, c_int) -> c_int,
+    pub disc_available_space:
+        unsafe extern "C" fn(*mut BurnDrive, *mut BurnWriteOpts) -> c_longlong,
+    pub msgs_set_severities:
+        unsafe extern "C" fn(*const c_char, *const c_char, *const c_char) -> c_int,
+    pub msgs_obtain: unsafe extern "C" fn(
+        *mut c_char,
+        *mut c_int,
+        *mut c_char,
+        *mut c_int,
+        *mut c_char,
+    ) -> c_int,
 }
 
 macro_rules! resolve {
@@ -372,6 +448,188 @@ impl RawLibburn {
                     c_int,
                 ) -> c_int
             );
+            let disc_create = resolve!(
+                lib,
+                "burn_disc_create",
+                unsafe extern "C" fn() -> *mut BurnDisc
+            );
+            let session_create = resolve!(
+                lib,
+                "burn_session_create",
+                unsafe extern "C" fn() -> *mut BurnSession
+            );
+            let session_free = resolve!(
+                lib,
+                "burn_session_free",
+                unsafe extern "C" fn(*mut BurnSession)
+            );
+            let disc_add_session = resolve!(
+                lib,
+                "burn_disc_add_session",
+                unsafe extern "C" fn(*mut BurnDisc, *mut BurnSession, c_uint) -> c_int
+            );
+            let track_create = resolve!(
+                lib,
+                "burn_track_create",
+                unsafe extern "C" fn() -> *mut BurnTrack
+            );
+            let track_free = resolve!(lib, "burn_track_free", unsafe extern "C" fn(*mut BurnTrack));
+            let session_add_track = resolve!(
+                lib,
+                "burn_session_add_track",
+                unsafe extern "C" fn(*mut BurnSession, *mut BurnTrack, c_uint) -> c_int
+            );
+            let track_set_source = resolve!(
+                lib,
+                "burn_track_set_source",
+                unsafe extern "C" fn(*mut BurnTrack, *mut BurnSource) -> c_int
+            );
+            let source_free = resolve!(
+                lib,
+                "burn_source_free",
+                unsafe extern "C" fn(*mut BurnSource)
+            );
+            let file_source_new = resolve!(
+                lib,
+                "burn_file_source_new",
+                unsafe extern "C" fn(*const c_char, *const c_char) -> *mut BurnSource
+            );
+            let fifo_source_new = resolve!(
+                lib,
+                "burn_fifo_source_new",
+                unsafe extern "C" fn(*mut BurnSource, c_int, c_int, c_int) -> *mut BurnSource
+            );
+            let fifo_inquire_status = resolve!(
+                lib,
+                "burn_fifo_inquire_status",
+                unsafe extern "C" fn(
+                    *mut BurnSource,
+                    *mut c_int,
+                    *mut c_int,
+                    *mut *const c_char,
+                ) -> c_int
+            );
+            let track_set_size = resolve!(
+                lib,
+                "burn_track_set_size",
+                unsafe extern "C" fn(*mut BurnTrack, c_longlong) -> c_int
+            );
+            let track_define_data = resolve!(
+                lib,
+                "burn_track_define_data",
+                unsafe extern "C" fn(*mut BurnTrack, c_int, c_int, c_int, c_int)
+            );
+            let write_opts_new = resolve!(
+                lib,
+                "burn_write_opts_new",
+                unsafe extern "C" fn(*mut BurnDrive) -> *mut BurnWriteOpts
+            );
+            let write_opts_free = resolve!(
+                lib,
+                "burn_write_opts_free",
+                unsafe extern "C" fn(*mut BurnWriteOpts)
+            );
+            let write_opts_set_perform_opc = resolve!(
+                lib,
+                "burn_write_opts_set_perform_opc",
+                unsafe extern "C" fn(*mut BurnWriteOpts, c_int)
+            );
+            let write_opts_set_simulate = resolve!(
+                lib,
+                "burn_write_opts_set_simulate",
+                unsafe extern "C" fn(*mut BurnWriteOpts, c_int) -> c_int
+            );
+            let write_opts_set_multi = resolve!(
+                lib,
+                "burn_write_opts_set_multi",
+                unsafe extern "C" fn(*mut BurnWriteOpts, c_int)
+            );
+            let write_opts_set_underrun_proof = resolve!(
+                lib,
+                "burn_write_opts_set_underrun_proof",
+                unsafe extern "C" fn(*mut BurnWriteOpts, c_int)
+            );
+            let write_opts_set_force = resolve!(
+                lib,
+                "burn_write_opts_set_force",
+                unsafe extern "C" fn(*mut BurnWriteOpts, c_int)
+            );
+            let write_opts_set_write_type = resolve!(
+                lib,
+                "burn_write_opts_set_write_type",
+                unsafe extern "C" fn(*mut BurnWriteOpts, c_int, c_int) -> c_int
+            );
+            let write_opts_auto_write_type = resolve!(
+                lib,
+                "burn_write_opts_auto_write_type",
+                unsafe extern "C" fn(
+                    *mut BurnWriteOpts,
+                    *mut BurnDisc,
+                    *mut c_char,
+                    c_int,
+                ) -> c_int
+            );
+            let precheck_write = resolve!(
+                lib,
+                "burn_precheck_write",
+                unsafe extern "C" fn(
+                    *mut BurnWriteOpts,
+                    *mut BurnDisc,
+                    *mut c_char,
+                    c_int,
+                ) -> c_int
+            );
+            let disc_write = resolve!(
+                lib,
+                "burn_disc_write",
+                unsafe extern "C" fn(*mut BurnWriteOpts, *mut BurnDisc)
+            );
+            let disc_erase = resolve!(
+                lib,
+                "burn_disc_erase",
+                unsafe extern "C" fn(*mut BurnDrive, c_int)
+            );
+            let drive_set_speed = resolve!(
+                lib,
+                "burn_drive_set_speed",
+                unsafe extern "C" fn(*mut BurnDrive, c_int, c_int)
+            );
+            let drive_cancel = resolve!(
+                lib,
+                "burn_drive_cancel",
+                unsafe extern "C" fn(*mut BurnDrive)
+            );
+            let drive_wrote_well = resolve!(
+                lib,
+                "burn_drive_wrote_well",
+                unsafe extern "C" fn(*mut BurnDrive) -> c_int
+            );
+            let drive_re_assess = resolve!(
+                lib,
+                "burn_drive_re_assess",
+                unsafe extern "C" fn(*mut BurnDrive, c_int) -> c_int
+            );
+            let disc_available_space = resolve!(
+                lib,
+                "burn_disc_available_space",
+                unsafe extern "C" fn(*mut BurnDrive, *mut BurnWriteOpts) -> c_longlong
+            );
+            let msgs_set_severities = resolve!(
+                lib,
+                "burn_msgs_set_severities",
+                unsafe extern "C" fn(*const c_char, *const c_char, *const c_char) -> c_int
+            );
+            let msgs_obtain = resolve!(
+                lib,
+                "burn_msgs_obtain",
+                unsafe extern "C" fn(
+                    *mut c_char,
+                    *mut c_int,
+                    *mut c_char,
+                    *mut c_int,
+                    *mut c_char,
+                ) -> c_int
+            );
 
             Ok(Self {
                 _lib: lib,
@@ -399,6 +657,39 @@ impl RawLibburn {
                 disc_free,
                 preset_device_open,
                 read_data,
+                disc_create,
+                session_create,
+                session_free,
+                disc_add_session,
+                track_create,
+                track_free,
+                session_add_track,
+                track_set_source,
+                source_free,
+                file_source_new,
+                fifo_source_new,
+                fifo_inquire_status,
+                track_set_size,
+                track_define_data,
+                write_opts_new,
+                write_opts_free,
+                write_opts_set_perform_opc,
+                write_opts_set_simulate,
+                write_opts_set_multi,
+                write_opts_set_underrun_proof,
+                write_opts_set_force,
+                write_opts_set_write_type,
+                write_opts_auto_write_type,
+                precheck_write,
+                disc_write,
+                disc_erase,
+                drive_set_speed,
+                drive_cancel,
+                drive_wrote_well,
+                drive_re_assess,
+                disc_available_space,
+                msgs_set_severities,
+                msgs_obtain,
             })
         }
     }

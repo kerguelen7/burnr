@@ -23,8 +23,8 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                 ui.separator();
                 ui.label(
                     egui::RichText::new(
-                        "ℹ Deze waarden worden in de brand-stap doorgegeven aan \
-                         burn_write_opts / burn_drive_set_speed.",
+                        "ℹ Deze waarden worden toegepast bij het branden (🔥 Branden \
+                         in het mediakaartje).",
                     )
                     .small()
                     .color(colors::DIM),
@@ -91,6 +91,14 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App) {
                 ui.label("Padding (KiB):");
                 ui.add(egui::DragValue::new(&mut s.padding_kib).range(0..=100_000));
             });
+
+            ui.add_space(4.0);
+            ui.checkbox(&mut s.keep_timestamps, "Originele bestandsdatums behouden")
+                .on_hover_text(
+                    "Aan: bestanden krijgen hun eigen datum/tijd op de schijf \
+                 (Rock Ridge + directoryrecords). Uit: alles krijgt de \
+                 opnametijd.",
+                );
         });
 }
 

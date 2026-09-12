@@ -35,6 +35,17 @@ cargo build --release
 ./target/release/libburn_gui
 ```
 
+## Bekende beperkingen
+
+- **Simulatie**: alleen mogelijk op schrijf-eenmalige media (CD-R, DVD-R,
+  DVD+R, BD-R). Overbeschrijfbare media (BD-RE, DVD+RW, DVD-RAM,
+  geformatteerde DVD-RW) kan **nooit** simuleren — libburn wijst het brandjob
+  dan af. De GUI waarschuwt proactief en de foutmelding geeft een concrete tip.
+- **CD-audio**: lezen en branden van audiotracks wordt nog niet ondersteund
+  (`burn_read_data` levert alleen 2048-byte datablokken).
+- **RAW-schrijfmodus**: niet mogelijk vanuit een ISO-bestand (vereist
+  2352-byte brondata); de GUI weigert dit met uitleg.
+
 ## Structuur
 
 | Bestand | Inhoud |
@@ -42,6 +53,7 @@ cargo build --release
 | `src/main.rs` | eframe-bootstrap |
 | `src/app.rs` | applicatiestatus, event-verwerking, paneelindeling |
 | `src/ffi.rs` | ruwe FFI: `#[repr(C)]`-types uit `libburn.h` + dynamisch laden via `libloading` |
+| `src/isofs.rs` | ruwe FFI voor libisofs (`libisofs.so.6`): ISO9660-image samenstellen als burn_source |
 | `src/worker.rs` | achtergrondworker die álle libburn-aanroepen op één thread uitvoert |
 | `src/logger.rs` | feedback-log met niveaus en tijdstempels |
 | `src/settings.rs` | gebruikersinstellingen (worden in de brand-stap aan libburn gekoppeld) |
@@ -65,18 +77,39 @@ cargo build --release
   (`burn_preset_device_open`) instelbaar: “Exclusief openen” uitzetten als de
   bestandsbeheerder de schijf aankoppelt (automount, bijv. Nemo/udisks2);
   grab-fouten tonen nu een gerichte hint met unmount-advies.
-- [ ] **Stap 2 — Media-details**: profiel/media-type via `burn_disc_get_profile`,
-  TOC lezen (`burn_disc_read_toc`), capaciteit (`burn_disc_get_media_capacity`).
-- [ ] **Stap 3 — Schijfkopie lezen**: `burn_disc_read` met voortgangsbalk
-  (`burn_drive_get_status` + `burn_progress`), FIFO (`burn_fifo_new`).
-- [ ] **Stap 4 — Branden**: `burn_source` uit bestand, `burn_write_opts`
-  (snelheid, TAO/SAO/RAW, simulatie, multi-session, padding, overburn),
-  voortgang en bufferstatus live in de UI.
-- [ ] **Stap 5 — Wissen/formatteren**: `burn_disc_erase`, `burn_disc_format`.
-- [ ] **Stap 6 — Instellingen volledig koppelen**: `burn_preset_device_open`,
-  snelheidslimieten, multi-session-gedrag; instellingen persistently opslaan.
-- [ ] **Stap 7 — Afwerking**: favorieten/presets, meerdere stations tegelijk,
-  foutopsporing (libburn-message-callback `burn_set_message_handler`).
+- [x] **Stap 4 — Branden**: ISO-bestand branden via `burn_disc_write` met
+  disc/session/track-model, file-bron + 4 MiB FIFO (`burn_fifo_source_new`),
+  write-opts (snelheid via `burn_drive_set_speed`, TAO/SAO/auto via
+  `burn_write_opts_auto_write_type`, simulatie, multi-session, padding,
+  overburn/force, underrun-proof), optioneel wissen vooraf
+  (`burn_disc_erase` + `burn_drive_re_assess`), voortgang met sector/snelheid/
+  buffer/FIFO-vulling, annuleren via `burn_drive_cancel`, resultaatcheck via
+  `burn_drive_wrote_well`, en libburn-meldingen (`burn_msgs_*`) live in het
+  logpaneel.
+- [x] **Stap 5 — Data-disc samenstellen**: bestanden/mappen kiezen in de GUI
+  (met bestands/map-picker, duplicaatfilter en grootte-schatting) en als
+  ISO9660-image op schijf branden via **libisofs** (`libisofs.so.6`,
+  runtime-loading zoals libburn; Rock Ridge + Joliet, ISO-niveau 3).
+  `iso_image_create_burn_source()` levert een burn_source die direct aan de
+  libburn-track wordt gekoppeld — geen tussenbestand. De brand-flow is
+  gedeeld met ISO-branden (grab/media-check/wissen, write-opts, poll-lus).
+  Daarnaast: fase-weergave bij het branden (lead-out/track-afsluiting wordt
+  zichtbaar na 100%), compacte apparaatinfo (technische details inklapbaar),
+  file pickers via `rfd`, en de “eilanden”-herindeling van het centrale
+  paneel (Station & media / Branden / Schijfkopie).
+- [ ] **Stap 6 — Wissen/formatteren**: losse knoppen voor `burn_disc_erase`
+  (snel/volledig) en `burn_disc_format`; de wis-machinery bestaat al in de
+  brand-flow.
+- [ ] **Stap 7 — Instellingen volledig koppelen**: snelheidslimieten,
+  multi-session-gedrag; instellingen persistent opslaan.
+- [ ] **Stap 8 — Afwerking**: favorieten/presets, meerdere stations tegelijk,
+  foutopsporing (libburn-meldingen zijn al gekoppeld via de msgs-queue).
+- [ ] **Stap 9 (optioneel) — Gebundelde libburn**: libburn-bron in de repo
+  (`vendor/`) en compileren via `build.rs` + `cc`-crate, als cargo-feature
+  `bundled` (statisch linken; de handgeschreven FFI in `src/ffi.rs` blijft
+  gelijk). Let op licentie: libburn is GPL-2+, dus bij distributie van een
+  gebundelde build moet de app dat ook zijn. Alternatief met minder werk: het
+  `.so`-bestand naast het programma meeleveren en via `LIBBURN_SO` laden.
 
 ## Tests
 
