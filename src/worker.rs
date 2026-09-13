@@ -93,6 +93,25 @@ pub struct MediaInfo {
     pub erasable: bool,
     pub sessions: Vec<TocSession>,
     pub incomplete_sessions: i32,
+    /// Stap 8: mediacode van de schijf (ADIP/ATIP), incl. fabrikant-schatting.
+    pub media_id: Option<MediaId>,
+    /// Stap 8: BD spare-info (defect management): (toegewezen, vrij) blokken.
+    pub bd_spare: Option<(i32, i32)>,
+}
+
+/// Mediacode van de ingelegde schijf (via `burn_disc_get_media_id`).
+#[derive(Clone, Debug)]
+pub struct MediaId {
+    /// Printbare combinatie van fabrikant + media-id, bijv. "PHILIP R04".
+    pub product_id: String,
+    /// Fabrikantcode (DVD/BD ADIP) of CD ATIP lead-in-code.
+    pub media_code1: Option<String>,
+    /// Media-id (DVD+/BD) of CD ATIP lead-out-code.
+    pub media_code2: Option<String>,
+    /// Book type-tekst (alleen DVD/BD; NULL bij CD).
+    pub book_type: Option<String>,
+    /// Fabrikantnaam via `burn_guess_manufacturer` (geen match = geen).
+    pub manufacturer: Option<String>,
 }
 
 /// Kopie van een `burn_drive_info` — bevat geen pointers naar libburn,
@@ -171,6 +190,7 @@ pub enum Command {
     /// Formatteer de media los van een brandjob (stap 6).
     FormatDisc {
         index: usize,
+        settings: BurnSettings,
     },
     /// Bezig lopende brandjob annuleren.
     CancelBurn,
@@ -394,8 +414,8 @@ fn run(cmds: Receiver<Command>, events: Sender<Event>, ctx: egui::Context) {
             Command::EraseDisc { index, fast } => {
                 erase_job(&state, index, fast, &cmds, &mut pending, &notify)
             }
-            Command::FormatDisc { index } => {
-                format_job(&state, index, &cmds, &mut pending, &notify)
+            Command::FormatDisc { index, settings } => {
+                format_job(&state, index, &settings, &cmds, &mut pending, &notify)
             }
             Command::Shutdown => shutdown = true,
         }
@@ -750,6 +770,94 @@ fn inspect(state: Option<&WorkerState>, index: usize, notify: &Notifier) {
 
     let erasable = unsafe { (st.raw.disc_erasable)(di.drive) } != 0;
 
+    // Stap 8: mediacode (ADIP/ATIP) en BD spare-info (defect management).
+    let mut media_id: Option<MediaId> = None;
+    let mut bd_spare: Option<(i32, i32)> = None;
+    if disc != DiscStatus::Empty && disc != DiscStatus::Unready {
+        unsafe {
+            let mut product: *mut c_char = std::ptr::null_mut();
+            let mut m1: *mut c_char = std::ptr::null_mut();
+            let mut m2: *mut c_char = std::ptr::null_mut();
+            let mut bt: *mut c_char = std::ptr::null_mut();
+            let r =
+                (st.raw.disc_get_media_id)(di.drive, &mut product, &mut m1, &mut m2, &mut bt, 0);
+            if r == 1 {
+                let product_id = ffi::take_cstring(product);
+                let code1 = ffi::take_cstring(m1);
+                let code2 = ffi::take_cstring(m2);
+                let book = ffi::take_cstring(bt);
+
+                // Fabrikant-schatting via libburn's ingebouwde lijst.
+                let manuf = match (&code1, &code2) {
+                    (Some(c1), Some(c2)) => {
+                        let c1c = std::ffi::CString::new(c1.as_str()).ok();
+                        let c2c = std::ffi::CString::new(c2.as_str()).ok();
+                        if let (Some(a), Some(b)) = (c1c, c2c) {
+                            let p = (st.raw.guess_manufacturer)(
+                                profile_no,
+                                a.as_ptr() as *mut c_char,
+                                b.as_ptr() as *mut c_char,
+                                0,
+                            );
+                            if p.is_null() {
+                                None
+                            } else {
+                                let t = std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned();
+                                ffi::free_c(p);
+                                if t.starts_with("Unknown") {
+                                    None
+                                } else {
+                                    Some(t)
+                                }
+                            }
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+
+                if let Some(pid) = &product_id {
+                    let manu_part = manuf
+                        .as_ref()
+                        .map(|m| format!(" — {m}"))
+                        .unwrap_or_default();
+                    notify.log(
+                        Level::Info,
+                        format!("Station {index}: mediacode = {pid}{manu_part}"),
+                    );
+                }
+                media_id = Some(MediaId {
+                    product_id: product_id.unwrap_or_default(),
+                    media_code1: code1,
+                    media_code2: code2,
+                    book_type: book,
+                    manufacturer: manuf,
+                });
+            }
+
+            // Defect management-status bij BD-media (spare-gebieden).
+            if matches!(profile_no, 0x41 | 0x42 | 0x43) {
+                let (mut alloc, mut free_b): (c_int, c_int) = (0, 0);
+                let r = (st.raw.disc_get_bd_spare_info)(di.drive, &mut alloc, &mut free_b, 0);
+                if r == 1 && alloc > 0 {
+                    bd_spare = Some((alloc, free_b));
+                    notify.log(
+                        Level::Info,
+                        format!(
+                            "Station {index}: defect management actief — spare vrij {free_b} van {alloc} blokken"
+                        ),
+                    );
+                } else {
+                    notify.log(
+                        Level::Info,
+                        "Geen BD spare-info — defect management niet actief",
+                    );
+                }
+            }
+        }
+    }
+
     // Stap 2: TOC-model van de schijf opbouwen (alleen zinvol bij media met
     // inhoud; bij lege media geeft de drive NULL of een leeg model).
     let (sessions, incomplete) = unsafe { read_toc(&st.raw, di.drive) };
@@ -812,6 +920,8 @@ fn inspect(state: Option<&WorkerState>, index: usize, notify: &Notifier) {
             erasable,
             sessions,
             incomplete_sessions: incomplete,
+            media_id,
+            bd_spare,
         },
     });
 }
@@ -1921,7 +2031,28 @@ unsafe fn run_write_poll(
         (st.raw.track_free)(track);
         (st.raw.session_free)(session);
         (st.raw.disc_free)(disc);
-        (st.raw.drive_release)(drive, s.eject_after as c_int);
+    }
+
+    // Eject: bij overschrijfbare media (DVD+RW, BD-RE, …) kan de drive nog
+    // even bezig zijn met achtergrondformattering; korte settle-tijd vóór het
+    // eject-verzoek zodat de drive die niet hoeft te negeren.
+    let mut profile_no: c_int = 0;
+    let mut pname = [0 as c_char; 80];
+    let _ = unsafe { (st.raw.disc_get_profile)(drive, &mut profile_no, pname.as_mut_ptr()) };
+    if s.eject_after {
+        if profile_is_overwritable(profile_no) {
+            notify.log(
+                Level::Info,
+                "Korte pauze voor de eject — de drive kan nog bezig zijn met \
+                 achtergrondformattering…",
+            );
+            thread::sleep(Duration::from_secs(2));
+        }
+        unsafe { (st.raw.drive_release)(drive, 1) };
+        notify.log(Level::Info, "Drive vrijgegeven met eject-verzoek");
+    } else {
+        unsafe { (st.raw.drive_release)(drive, 0) };
+        notify.log(Level::Info, "Drive vrijgegeven");
     }
 
     if cancelled {
@@ -2341,6 +2472,7 @@ pub fn profile_is_formattable(pno: i32) -> bool {
 fn format_job(
     state: &Option<WorkerState>,
     index: usize,
+    s: &BurnSettings,
     cmds: &Receiver<Command>,
     pending: &mut VecDeque<Command>,
     notify: &Notifier,
@@ -2411,12 +2543,24 @@ fn format_job(
     // ziet libburn een al geformatteerde schijf anders als no-op
     // ("FORMAT UNIT ignored. Already completed."). Bit4 forceert de "de-ice"
     // — de bestaande data wordt gewist. size-mode 3 (bit1+2) = standaardgrootte.
+    // Bit5 (optioneel, instelling): defect management proberen uit te
+    // schakelen — sneller branden, maar geen hermapping van slechte blokken.
+    let mut fmt_flag = (3 << 1) | (1 << 4);
+    if s.disable_dm_on_format {
+        fmt_flag |= 1 << 5;
+        notify.log(
+            Level::Info,
+            "Defect management wordt bij dit format geprobeerd uit te \
+             schakelen — sneller branden, maar slechte blokken worden niet \
+             meer hermapd",
+        );
+    }
     notify.log(
         Level::Info,
         "Volledige format — bestaande data wordt gewist; dit kan enkele \
          minuten duren…",
     );
-    unsafe { (st.raw.disc_format)(di.drive, 0, (3 << 1) | (1 << 4)) };
+    unsafe { (st.raw.disc_format)(di.drive, 0, fmt_flag) };
     let well = match wait_media_job(
         st,
         di.drive,

@@ -10,9 +10,33 @@
 //! (libburn 1.5.6) en moeten exact overeenkomen met de geïnstalleerde
 //! library (SONAME `libburn.so.4`).
 
-use std::ffi::{c_char, c_int, c_longlong, c_uint};
+use std::ffi::{c_char, c_int, c_longlong, c_uint, c_void};
 
 use libloading::Library;
+
+// libc free() — libburn geeft strings terug (burn_disc_get_media_id,
+// burn_guess_manufacturer) die met free() moeten worden vrijgegeven.
+unsafe extern "C" {
+    fn free(ptr: *mut c_void);
+}
+
+/// Neemt eigendom van een door libburn toegewezen C-string en zet die om
+/// naar een Rust-String (de C-string wordt netjes vrijgegeven).
+pub(crate) unsafe fn take_cstring(p: *mut c_char) -> Option<String> {
+    unsafe {
+        if p.is_null() {
+            return None;
+        }
+        let s = std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned();
+        free(p as *mut c_void);
+        Some(s)
+    }
+}
+
+/// Geeft een door libburn toegewezen C-string weer vrij.
+pub(crate) unsafe fn free_c(p: *mut c_char) {
+    unsafe { free(p as *mut c_void) };
+}
 
 /// Maximale lengte van een drive-adres (`BURN_DRIVE_ADR_LEN`).
 pub const BURN_DRIVE_ADR_LEN: usize = 1024;
@@ -306,6 +330,18 @@ pub struct RawLibburn {
     pub drive_cancel: unsafe extern "C" fn(*mut BurnDrive),
     pub drive_wrote_well: unsafe extern "C" fn(*mut BurnDrive) -> c_int,
     pub drive_re_assess: unsafe extern "C" fn(*mut BurnDrive, c_int) -> c_int,
+    pub disc_get_bd_spare_info:
+        unsafe extern "C" fn(*mut BurnDrive, *mut c_int, *mut c_int, c_int) -> c_int,
+    pub disc_get_media_id: unsafe extern "C" fn(
+        *mut BurnDrive,
+        *mut *mut c_char,
+        *mut *mut c_char,
+        *mut *mut c_char,
+        *mut *mut c_char,
+        c_int,
+    ) -> c_int,
+    pub guess_manufacturer:
+        unsafe extern "C" fn(c_int, *mut c_char, *mut c_char, c_int) -> *mut c_char,
     pub disc_available_space:
         unsafe extern "C" fn(*mut BurnDrive, *mut BurnWriteOpts) -> c_longlong,
     pub msgs_set_severities:
@@ -622,6 +658,28 @@ impl RawLibburn {
                 "burn_drive_re_assess",
                 unsafe extern "C" fn(*mut BurnDrive, c_int) -> c_int
             );
+            let disc_get_bd_spare_info = resolve!(
+                lib,
+                "burn_disc_get_bd_spare_info",
+                unsafe extern "C" fn(*mut BurnDrive, *mut c_int, *mut c_int, c_int) -> c_int
+            );
+            let disc_get_media_id = resolve!(
+                lib,
+                "burn_disc_get_media_id",
+                unsafe extern "C" fn(
+                    *mut BurnDrive,
+                    *mut *mut c_char,
+                    *mut *mut c_char,
+                    *mut *mut c_char,
+                    *mut *mut c_char,
+                    c_int,
+                ) -> c_int
+            );
+            let guess_manufacturer = resolve!(
+                lib,
+                "burn_guess_manufacturer",
+                unsafe extern "C" fn(c_int, *mut c_char, *mut c_char, c_int) -> *mut c_char
+            );
             let disc_available_space = resolve!(
                 lib,
                 "burn_disc_available_space",
@@ -702,6 +760,9 @@ impl RawLibburn {
                 drive_cancel,
                 drive_wrote_well,
                 drive_re_assess,
+                disc_get_bd_spare_info,
+                disc_get_media_id,
+                guess_manufacturer,
                 disc_available_space,
                 msgs_set_severities,
                 msgs_obtain,

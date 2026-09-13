@@ -29,10 +29,36 @@ pub enum ScanState {
 }
 
 /// Bron voor het branden: een ISO-bestand of een eigen bestandsselectie.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub enum BurnSourceKind {
+    #[default]
     IsoFile,
     FileSet,
+}
+
+/// Status die tussen sessies bewaard wordt (stap 8, eframe-persistence).
+/// Velden zijn Option zodat oudere opslagbestanden zonder fouten laden.
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+pub struct PersistedState {
+    pub settings: Option<BurnSettings>,
+    pub exclusive_open: Option<bool>,
+    pub burn_source_kind: Option<BurnSourceKind>,
+    pub burn_path: Option<String>,
+    pub read_path: Option<String>,
+    pub log_filter: Option<[bool; 4]>,
+}
+
+impl PersistedState {
+    fn from_app(app: &App) -> Self {
+        Self {
+            settings: Some(app.settings.clone()),
+            exclusive_open: Some(app.exclusive_open),
+            burn_source_kind: Some(app.burn_source_kind),
+            burn_path: Some(app.burn_path.clone()),
+            read_path: Some(app.read_path.clone()),
+            log_filter: Some(app.log_filter),
+        }
+    }
 }
 
 /// Status-LED voor het brand-eiland: houdt de uitkomst van de laatste job
@@ -186,6 +212,37 @@ impl App {
             log_filter: [true, true, true, true],
             auto_scroll: true,
         };
+
+        // Stap 8: opgeslagen instellingen laden (velden zijn Option; ontbrekende
+        // velden krijgen de defaults hierboven).
+        if let Some(storage) = cc.storage {
+            let persisted: Option<PersistedState> = eframe::get_value(storage, eframe::APP_KEY);
+            if let Some(p) = persisted {
+                if let Some(s) = p.settings {
+                    app.settings = s;
+                }
+                if let Some(v) = p.exclusive_open {
+                    app.exclusive_open = v;
+                }
+                if let Some(v) = p.burn_source_kind {
+                    app.burn_source_kind = v;
+                }
+                if let Some(v) = p.burn_path {
+                    app.burn_path = v;
+                }
+                if let Some(v) = p.read_path {
+                    app.read_path = v;
+                }
+                if let Some(v) = p.log_filter {
+                    app.log_filter = v;
+                }
+                app.log.push(
+                    Level::Info,
+                    "Instellingen geladen uit vorige sessie".to_string(),
+                );
+            }
+        }
+
         app.log.push(
             Level::Info,
             "LibBurn GUI gestart — libburn wordt van het systeem geladen…".to_string(),
@@ -355,7 +412,10 @@ impl App {
         }
         self.log
             .push(Level::Info, "Formatteren aangevraagd".to_string());
-        self.send(Command::FormatDisc { index });
+        self.send(Command::FormatDisc {
+            index,
+            settings: self.settings.clone(),
+        });
     }
 
     /// Voeg een bestand/map toe aan de data-selectie (geen duplicaten).
@@ -674,6 +734,12 @@ impl eframe::App for App {
         ui::settings_panel::show(ui, self);
         ui::log_panel::show(ui, self);
         ui::details_panel::show(ui, self);
+    }
+
+    /// Stap 8: instellingen persistent opslaan (eframe schrijft dit weg naar
+    /// de config-map van de gebruiker bij afsluiten).
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(storage, eframe::APP_KEY, &PersistedState::from_app(self));
     }
 }
 

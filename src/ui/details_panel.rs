@@ -286,6 +286,38 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
                     media.profile_no
                 ));
             }
+
+            // Mediacode (ADIP/ATIP) + fabrikant-schatting (stap 8).
+            if let Some(mid) = &media.media_id {
+                if !mid.product_id.is_empty() {
+                    let manu = mid
+                        .manufacturer
+                        .as_ref()
+                        .map(|m| format!(" — {m}"))
+                        .unwrap_or_default();
+                    ui.label(format!("Mediacode: {}{manu}", mid.product_id));
+                }
+                if let (Some(a), Some(b)) = (&mid.media_code1, &mid.media_code2) {
+                    ui.weak(format!("Media-codes: {a} / {b}"));
+                }
+                if let Some(bt) = &mid.book_type {
+                    ui.weak(format!("Book type: {bt}"));
+                }
+            }
+
+            // Defect management-status bij BD-media (stap 8).
+            if matches!(media.profile_no, 0x41 | 0x42 | 0x43) {
+                let txt = match media.bd_spare {
+                    Some((alloc, free)) => {
+                        format!("Defect management: actief — spare vrij {free} van {alloc} blokken")
+                    }
+                    None => "Defect management: niet actief (sneller branden, \
+                             geen hermapping van slechte blokken)"
+                        .to_string(),
+                };
+                ui.weak(txt);
+            }
+
             ui.horizontal_wrapped(|ui| {
                 // De erasable-bit melden veel drives alleen voor CD; het
                 // SCSI-profiel is de betrouwbare indicatie.
@@ -657,6 +689,20 @@ fn maint_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry
             app.request_format(d.index);
         }
     });
+
+    // Defect management uitschakelen bij het formatteren (stap 8) — alleen
+    // relevant voor media met DM (BD, DVD-RAM).
+    if formattable && matches!(profile, 0x12 | 0x41 | 0x42 | 0x43) {
+        ui.checkbox(
+            &mut app.settings.disable_dm_on_format,
+            "Defect management uitschakelen",
+        )
+        .on_hover_text(
+            "Bij het formatteren: geen spare-gebieden en geen hermapping van \
+             slechte blokken. Branden gaat daarna een stuk sneller — gebruik \
+             dit alleen op betrouwbare media.",
+        );
+    }
     if !ready {
         ui.weak("(eerst een scan uitvoeren)");
     } else if overwritable {

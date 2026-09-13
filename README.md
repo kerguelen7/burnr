@@ -103,26 +103,26 @@ cargo build --release
   Slimme knop-activering per profiel (overschrijfbare media → formatteren
   i.p.v. wissen), voortgang in log én UI, annuleren, en de wis-flow van de
   brand-flow deelt nu één gedeelde wachtlus.
-- [ ] **Stap 7 (optie) — Bestanden toevoegen aan overschrijfbare media
-  (grow)**: bestanden toevoegen aan een beschreven DVD+RW/DVD-RAM/BD-RE met
-  behoud van de oude inhoud. NB: dit is géén multi-session (die media heeft
-  geen sessies; libburn weigert `multi=1` terecht) maar een her-schrijfactie
-  van het bestandssysteem: via `iso_data_source_new_from_file()` +
-  `iso_image_import()` de bestaande ISO-boom inlezen, nieuwe bestanden
-  toevoegen en de image opnieuw schrijven — oude bestandsdata-blokken blijven
-  daarbij fysiek intact waar mogelijk (de aanpak van xorriso's “grow”-modus).
-  Nog niet zeker of dit ingebouwd wordt; de meerwaarde hangt af van de
-  gewenste gebruiksscenario's.
-- [ ] **Stap 8 — Instellingen volledig koppelen**: snelheidslimieten,
-  multi-session-gedrag; instellingen persistent opslaan.
+- [x] **Stap 7 — OVERGESLAGEN** (grow op overschrijfbare media): libburn's
+  weigering van `multi=1` op overschrijfbare media is technisch juist; de
+  meerwaarde van grow rechtvaardigt de complexiteit niet voor nu.
+- [x] **Stap 8 — Instellingen persistent opslaan + uitbreidingen**:
+  alle instellingen, exclusief-openen, bronkeuze en laatst-gebruikte paden
+  worden via eframe-persistence bewaard en bij de start geladen. Daarnaast:
+  **mediacode-weergave** (`burn_disc_get_media_id` + fabrikant-schatting via
+  `burn_guess_manufacturer`, bijv. “PHILIP R04 — Philips”), **defect
+  management**-status bij BD-media (`burn_disc_get_bd_spare_info`) en een
+  vinkje om DM bij het formatteren uit te schakelen (bit5, sneller branden),
+  een **snelheden-combobox** gevuld met de snelheden uit de media-inspectie,
+  en **eject-diagnostiek**: bij overschrijfbare media een settle-pauze vóór
+  het eject-verzoek (achtergrondformattering) met logfeedback.
 - [ ] **Stap 9 — Afwerking**: favorieten/presets, meerdere stations tegelijk,
   foutopsporing (libburn-meldingen zijn al gekoppeld via de msgs-queue).
-- [ ] **Stap 10 (optioneel) — Gebundelde libburn**: libburn-bron in de repo
-  (`vendor/`) en compileren via `build.rs` + `cc`-crate, als cargo-feature
-  `bundled` (statisch linken; de handgeschreven FFI in `src/ffi.rs` blijft
-  gelijk). Let op licentie: libburn is GPL-2+, dus bij distributie van een
-  gebundelde build moet de app dat ook zijn. Alternatief met minder werk: het
-  `.so`-bestand naast het programma meeleveren en via `LIBBURN_SO` laden.
+- [ ] **Stap 10 (geparkteerd tot na deze thread) — .deb-pakket**: Debian-package
+  met runtime-afhankelijkheden. NB: de GUI gebruikt direct **libburn4** en
+  **libisofs6**; **libisoburn1** wordt niet gebruikt (geen libisoburn-API in
+  de code) en is dus geen vereiste Depends. Build via `cargo deb` of
+  eigen `debian/`-regels.
 
 ## Tests
 

@@ -56,6 +56,60 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App) {
                 ui.weak("libburn-eenheid: 1000 bytes/s (bijv. 4234 ≈ 24× CD)");
             });
 
+            // Stap 8: snelheden uit de laatste media-inspectie als keuzelijst.
+            let speed_options: Vec<(i32, String)> = app
+                .selected
+                .and_then(|i| app.drives.get(i))
+                .and_then(|d| d.media.as_ref())
+                .map(|m| {
+                    let mut opts: Vec<(i32, String)> = m
+                        .speeds
+                        .iter()
+                        .filter(|sp| sp.write_speed > 0)
+                        .map(|sp| {
+                            (
+                                sp.write_speed,
+                                crate::worker::speed_multiplier_label(
+                                    sp.profile_loaded,
+                                    sp.write_speed,
+                                ),
+                            )
+                        })
+                        .collect();
+                    opts.sort_by(|a, b| b.0.cmp(&a.0));
+                    opts.dedup_by(|a, b| a.0 == b.0);
+                    opts
+                })
+                .unwrap_or_default();
+            if !speed_options.is_empty() {
+                let current = if s.speed_max {
+                    "Maximaal".to_string()
+                } else {
+                    format!("{} kB/s", s.speed_kbps)
+                };
+                egui::ComboBox::from_id_salt("settings.speed_pick")
+                    .selected_text(format!("Kies: {current}"))
+                    .show_ui(ui, |ui| {
+                        if ui
+                            .selectable_label(!s.speed_max, format!("{} kB/s", s.speed_kbps))
+                            .clicked()
+                        {
+                            s.speed_max = false;
+                        }
+                        for (kb, mult) in &speed_options {
+                            let label = format!("{kb} kB/s — {mult}");
+                            if ui
+                                .selectable_label(!s.speed_max && s.speed_kbps == *kb, label)
+                                .clicked()
+                            {
+                                s.speed_max = false;
+                                s.speed_kbps = *kb;
+                            }
+                        }
+                    });
+                ui.weak("Snelheden zoals de drive die meldt voor de ingelegde media.");
+            }
+
             ui.add_space(4.0);
             ui.label(egui::RichText::new("Schrijfmodus").strong());
             for mode in [

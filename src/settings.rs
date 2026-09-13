@@ -1,9 +1,11 @@
 //! Instellingen die de gebruiker via de GUI kan aanpassen.
 //!
-//! Stap 1: de waarden worden beheerd en getoond; de koppeling naar
-//! `burn_write_opts` / `burn_drive_set_speed` volgt in de brand-stap.
+//! De waarden worden bij het branden/kopiëren doorgegeven aan libburn en
+//! persistent opgeslagen (stap 8, eframe-persistence).
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum WriteMode {
     Auto,
     Tao,
@@ -22,7 +24,7 @@ impl WriteMode {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum BlankMode {
     Fast,
     Full,
@@ -37,7 +39,7 @@ impl BlankMode {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum MultiSession {
     Auto,
     KeepOpen,
@@ -54,7 +56,7 @@ impl MultiSession {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BurnSettings {
     /// `true` = maximale snelheid, anders `speed_kbps` gebruiken.
     pub speed_max: bool,
@@ -76,6 +78,9 @@ pub struct BurnSettings {
     /// Bij bestands-branden: originele bestandsdatums behouden i.p.v. de
     /// opnametijd (Rock Ridge + directoryrecords).
     pub keep_timestamps: bool,
+    /// Bij formatteren van BD/DVD-RAM: defect management proberen uit te
+    /// schakelen (sneller branden, geen hermapping van slechte blokken).
+    pub disable_dm_on_format: bool,
 }
 
 impl Default for BurnSettings {
@@ -93,6 +98,7 @@ impl Default for BurnSettings {
             blank_mode: BlankMode::Fast,
             eject_after: true,
             keep_timestamps: true,
+            disable_dm_on_format: false,
         }
     }
 }
