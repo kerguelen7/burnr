@@ -104,10 +104,6 @@ pub struct MediaInfo {
 pub struct MediaId {
     /// Printbare combinatie van fabrikant + media-id, bijv. "PHILIP R04".
     pub product_id: String,
-    /// Fabrikantcode (DVD/BD ADIP) of CD ATIP lead-in-code.
-    pub media_code1: Option<String>,
-    /// Media-id (DVD+/BD) of CD ATIP lead-out-code.
-    pub media_code2: Option<String>,
     /// Book type-tekst (alleen DVD/BD; NULL bij CD).
     pub book_type: Option<String>,
     /// Fabrikantnaam via `burn_guess_manufacturer` (geen match = geen).
@@ -829,11 +825,13 @@ fn inspect(state: Option<&WorkerState>, index: usize, notify: &Notifier) {
                 }
                 media_id = Some(MediaId {
                     product_id: product_id.unwrap_or_default(),
-                    media_code1: code1,
-                    media_code2: code2,
                     book_type: book,
                     manufacturer: manuf,
                 });
+                // code1/code2 zijn alleen lokaal gebruikt voor de
+                // fabrikant-schatting en worden hieronder verwijderd.
+                drop(code1);
+                drop(code2);
             }
 
             // Defect management-status bij BD-media (spare-gebieden).

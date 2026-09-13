@@ -253,7 +253,6 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
         });
 
         if let Some(media) = &d.media {
-            ui.add_space(4.0);
             let (disc_color, disc_text) = match media.disc_status {
                 DiscStatus::Blank => (colors::OK, "Leeg — klaar om te beschrijven"),
                 DiscStatus::Empty => (colors::DIM, "Geen schijf"),
@@ -263,127 +262,142 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
                 _ => (colors::DIM, disc_label(media.disc_status)),
             };
             ui.colored_label(disc_color, format!("Media: {disc_text}"));
-            ui.label(format!(
+            ui.weak(format!(
                 "Station: {}",
                 drive_status_label(media.drive_status)
             ));
 
-            // Mediatype (SCSI-profiel).
-            if !media.profile_name.is_empty() {
-                ui.label(format!(
-                    "Mediatype: {} (profiel 0x{:02X})",
-                    media.profile_name, media.profile_no
-                ));
+            // Compacte info in twee kolommen (label–waarde-paren naast elkaar).
+            // De Media-codes (media_code1/2) zijn redundant met de mediacode
+            // en zijn daarom weggelaten.
+            let mediatype_val = if !media.profile_name.is_empty() {
+                format!("{} (0x{:02X})", media.profile_name, media.profile_no)
             } else if media.profile_no > 0 {
                 let fallback = profile_fallback_name(media.profile_no);
-                ui.label(format!(
-                    "Mediatype: {} (profiel 0x{:02X})",
+                format!(
+                    "{} (0x{:02X})",
                     if fallback.is_empty() {
                         "onbekend"
                     } else {
                         fallback
                     },
                     media.profile_no
-                ));
-            }
+                )
+            } else {
+                "—".to_string()
+            };
 
-            // Mediacode (ADIP/ATIP) + fabrikant-schatting (stap 8).
-            if let Some(mid) = &media.media_id {
-                if !mid.product_id.is_empty() {
+            let mediacode_val = media
+                .media_id
+                .as_ref()
+                .map(|mid| {
                     let manu = mid
                         .manufacturer
                         .as_ref()
                         .map(|m| format!(" — {m}"))
                         .unwrap_or_default();
-                    ui.label(format!("Mediacode: {}{manu}", mid.product_id));
-                }
-                if let (Some(a), Some(b)) = (&mid.media_code1, &mid.media_code2) {
-                    ui.weak(format!("Media-codes: {a} / {b}"));
-                }
-                if let Some(bt) = &mid.book_type {
-                    ui.weak(format!("Book type: {bt}"));
-                }
-            }
+                    format!("{}{manu}", mid.product_id)
+                })
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "—".to_string());
 
-            // Defect management-status bij BD-media (stap 8).
-            if matches!(media.profile_no, 0x41 | 0x42 | 0x43) {
-                let txt = match media.bd_spare {
+            let rewritable =
+                media.erasable || crate::worker::profile_is_rewritable(media.profile_no);
+            let book_val = media
+                .media_id
+                .as_ref()
+                .and_then(|mid| mid.book_type.clone())
+                .unwrap_or_else(|| "—".to_string());
+            let capacity_val = media
+                .read_capacity_blocks
+                .map(|b| format!("{} ({} blokken)", format_blocks(b), b))
+                .unwrap_or_else(|| "—".to_string());
+            let dm_val = if matches!(media.profile_no, 0x41 | 0x42 | 0x43) {
+                match media.bd_spare {
                     Some((alloc, free)) => {
-                        format!("Defect management: actief — spare vrij {free} van {alloc} blokken")
+                        format!("actief (vrij {free} van {alloc})")
                     }
-                    None => "Defect management: niet actief (sneller branden, \
-                             geen hermapping van slechte blokken)"
-                        .to_string(),
-                };
-                ui.weak(txt);
-            }
-
-            ui.horizontal_wrapped(|ui| {
-                // De erasable-bit melden veel drives alleen voor CD; het
-                // SCSI-profiel is de betrouwbare indicatie.
-                chip(
-                    ui,
-                    "herbeschrijfbaar",
-                    media.erasable || crate::worker::profile_is_rewritable(media.profile_no),
-                );
-                if let Some(blocks) = media.read_capacity_blocks {
-                    ui.label(format!(
-                        "Leesbare capaciteit: {} ({} blokken)",
-                        format_blocks(blocks),
-                        blocks
-                    ));
+                    None => "uit".to_string(),
                 }
-            });
+            } else {
+                "—".to_string()
+            };
+
+            egui::Grid::new("media_info_grid")
+                .num_columns(4)
+                .spacing([10.0, 3.0])
+                .show(ui, |ui| {
+                    ui.weak("Type:");
+                    ui.label(mediatype_val);
+                    ui.weak("Mediacode:");
+                    ui.label(mediacode_val);
+                    ui.end_row();
+
+                    ui.weak("Herbeschrijfbaar:");
+                    ui.label(if rewritable { "ja" } else { "nee" });
+                    ui.weak("Book type:");
+                    ui.label(book_val);
+                    ui.end_row();
+
+                    ui.weak("Capaciteit (leesbaar):");
+                    ui.label(capacity_val);
+                    ui.weak("Defect mgmt:");
+                    ui.label(dm_val);
+                    ui.end_row();
+                });
 
             ui.add_space(4.0);
             toc_section(ui, media);
 
+            if !media.speeds.is_empty() {
+                egui::CollapsingHeader::new(
+                    egui::RichText::new(format!("Snelheden ({} entréés)", media.speeds.len()))
+                        .small(),
+                )
+                .default_open(false)
+                .show(ui, |ui| {
+                    egui::Grid::new("speeds_grid")
+                        .striped(true)
+                        .num_columns(5)
+                        .spacing([16.0, 3.0])
+                        .show(ui, |ui| {
+                            ui.strong("Bron");
+                            ui.strong("Profiel");
+                            ui.strong("Schrijven");
+                            ui.strong("Lezen");
+                            ui.strong("End-LBA");
+                            ui.end_row();
+                            for s in &media.speeds {
+                                ui.label(speed_source_label(s.source));
+                                ui.label(if s.profile_name.is_empty() {
+                                    "—".to_string()
+                                } else {
+                                    s.profile_name.clone()
+                                });
+                                ui.label(format!(
+                                    "{}  {}",
+                                    s.write_speed,
+                                    speed_multiplier_label(s.profile_loaded, s.write_speed)
+                                ));
+                                ui.label(format!(
+                                    "{}  {}",
+                                    s.read_speed,
+                                    speed_multiplier_label(s.profile_loaded, s.read_speed)
+                                ));
+                                ui.label(if s.end_lba > 0 {
+                                    s.end_lba.to_string()
+                                } else {
+                                    "—".to_string()
+                                });
+                                ui.end_row();
+                            }
+                        });
+                });
+            }
+
             ui.add_space(6.0);
             ui.separator();
             maint_section(ui, app, d);
-
-            if media.speeds.is_empty() {
-                ui.weak("Geen snelheidsinformatie beschikbaar.");
-            } else {
-                ui.add_space(4.0);
-                ui.label(egui::RichText::new("Snelheden (kB/s)").strong());
-                egui::Grid::new("speeds_grid")
-                    .striped(true)
-                    .num_columns(5)
-                    .spacing([16.0, 3.0])
-                    .show(ui, |ui| {
-                        ui.strong("Bron");
-                        ui.strong("Profiel");
-                        ui.strong("Schrijven");
-                        ui.strong("Lezen");
-                        ui.strong("End-LBA");
-                        ui.end_row();
-                        for s in &media.speeds {
-                            ui.label(speed_source_label(s.source));
-                            ui.label(if s.profile_name.is_empty() {
-                                "—".to_string()
-                            } else {
-                                s.profile_name.clone()
-                            });
-                            ui.label(format!(
-                                "{}  {}",
-                                s.write_speed,
-                                speed_multiplier_label(s.profile_loaded, s.write_speed)
-                            ));
-                            ui.label(format!(
-                                "{}  {}",
-                                s.read_speed,
-                                speed_multiplier_label(s.profile_loaded, s.read_speed)
-                            ));
-                            ui.label(if s.end_lba > 0 {
-                                s.end_lba.to_string()
-                            } else {
-                                "—".to_string()
-                            });
-                            ui.end_row();
-                        }
-                    });
-            }
         } else if !inspecting {
             ui.weak("Nog niet geïnspecteerd — klik op “Media inspecteren”.");
         }
