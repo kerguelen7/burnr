@@ -223,6 +223,10 @@ impl App {
         self.auto_scan_queued = true;
         self.log
             .push(Level::Info, "libburn (opnieuw) laden…".to_string());
+        self.log.push(
+            Level::Info,
+            "Automatische scan volgt na het herladen.".to_string(),
+        );
         self.send(Command::LoadLibrary {
             path,
             exclusive: self.exclusive_open,
@@ -452,6 +456,10 @@ impl App {
                 self.lib_state = LibState::Loaded { version, path };
                 if self.auto_scan_queued {
                     self.auto_scan_queued = false;
+                    self.log.push(
+                        Level::Info,
+                        "Automatische scan na herladen gestart".to_string(),
+                    );
                     self.send(Command::Scan);
                 }
             }

@@ -127,6 +127,10 @@ fn drive_details(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry
 
             ui.add_space(4.0);
             ui.label(egui::RichText::new("Mogelijkheden").strong());
+            // Bitvelden dekken CD/DVD-RAM; BD en DVD+R/DVD+RW/DVD-R DL staan
+            // alleen in de profiellijst van de drive.
+            let has_profile =
+                |codes: &[i32]| d.supported_profiles.iter().any(|p| codes.contains(p));
             ui.horizontal_wrapped(|ui| {
                 ui.label(egui::RichText::new("lezen:").color(colors::DIM));
                 for (name, ok) in [
@@ -135,6 +139,7 @@ fn drive_details(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry
                     ("DVD-R", d.caps.read_dvdr),
                     ("DVD-RAM", d.caps.read_dvdram),
                     ("DVD-ROM", d.caps.read_dvdrom),
+                    ("BD-ROM", has_profile(&[0x40])),
                     ("C2-fouten", d.caps.c2_errors),
                 ] {
                     chip(ui, name, ok);
@@ -147,6 +152,12 @@ fn drive_details(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry
                     ("CD-RW", d.caps.write_cdrw),
                     ("DVD-R", d.caps.write_dvdr),
                     ("DVD-RAM", d.caps.write_dvdram),
+                    ("DVD+R", has_profile(&[0x1B])),
+                    ("DVD+RW", has_profile(&[0x1A])),
+                    ("DVD-R DL", has_profile(&[0x15, 0x16])),
+                    ("DVD+R DL", has_profile(&[0x2B])),
+                    ("BD-R", has_profile(&[0x41, 0x42])),
+                    ("BD-RE", has_profile(&[0x43])),
                 ] {
                     chip(ui, name, ok);
                 }

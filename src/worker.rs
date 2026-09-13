@@ -110,6 +110,10 @@ pub struct DriveEntry {
     pub sao_block_types: i32,
     pub raw_block_types: i32,
     pub packet_block_types: i32,
+    /// Profielcodes die de drive ondersteunt (o.a. de enige bron voor
+    /// DVD+R/DVD+RW/DVD-R DL/BD-capabilities — de burn_drive_info-bitvelden
+    /// bevatten die niet).
+    pub supported_profiles: Vec<i32>,
     pub media: Option<MediaInfo>,
     /// Reden waarom de laatste inspectie mislukte (voor feedback in de UI).
     pub inspect_error: Option<String>,
@@ -570,6 +574,27 @@ fn drive_entry_from_raw(index: usize, di: &DriveInfo, raw: &RawLibburn) -> Drive
 
     let adr = unsafe { adr_of(di, raw) };
 
+    // Profiellijst van de drive: de enige bron voor BD/DVD+R-capabilities
+    // (zie libburn.h bij burn_drive_info). Caller-provided arrays, geen free.
+    let mut supported_profiles: Vec<i32> = Vec::new();
+    unsafe {
+        let mut num: c_int = 0;
+        let mut profiles = [0 as c_int; 64];
+        let mut is_current = [0 as c_char; 64];
+        if (raw.drive_get_all_profiles)(
+            di.drive,
+            &mut num,
+            profiles.as_mut_ptr(),
+            is_current.as_mut_ptr(),
+        ) == 1
+            && num > 0
+        {
+            for i in 0..num as usize {
+                supported_profiles.push(profiles[i]);
+            }
+        }
+    }
+
     DriveEntry {
         index,
         vendor: cbuf_to_string(&di.vendor),
@@ -594,6 +619,7 @@ fn drive_entry_from_raw(index: usize, di: &DriveInfo, raw: &RawLibburn) -> Drive
         sao_block_types: di.sao_block_types,
         raw_block_types: di.raw_block_types,
         packet_block_types: di.packet_block_types,
+        supported_profiles,
         media: None,
         inspect_error: None,
     }
@@ -2116,7 +2142,9 @@ fn wait_media_job(
     pending: &mut VecDeque<Command>,
     notify: &Notifier,
 ) -> Result<bool, ()> {
-    let mut last_pct: i32 = -1;
+    // None = onbepaalde voortgang (drive geeft geen sectoren door);
+    // Some(i32::MIN) = nog niets gelogd.
+    let mut last_pct: Option<i32> = Some(i32::MIN);
     loop {
         match cmds.try_recv() {
             Ok(Command::CancelBurn) => {
@@ -2142,15 +2170,26 @@ fn wait_media_job(
         if ds == DriveStatus::Idle {
             break;
         }
-        if ds == busy_status && prog.sectors > 0 {
-            let pct = ((prog.sector as f32 / prog.sectors as f32) * 100.0).min(100.0) as i32;
-            if pct != last_pct {
-                notify.log(Level::Info, format!("{label}… {pct}%"));
+        if ds == busy_status {
+            // Bij sommige media (bijv. DVD+RW) rapporteert de drive geen
+            // sector-voortgang tijdens het formatteren; toon dan "bezig"
+            // i.p.v. een misleidend 0%.
+            let pct = if prog.sectors > 0 {
+                Some(((prog.sector as f32 / prog.sectors as f32) * 100.0).min(100.0) as i32)
+            } else {
+                None
+            };
+            let changed = pct != last_pct;
+            if changed {
+                match pct {
+                    Some(p) => notify.log(Level::Info, format!("{label}… {p}%")),
+                    None => notify.log(Level::Info, format!("{label}… bezig")),
+                }
                 if let Some((kind, index)) = maint {
                     notify.send(Event::MaintProgress {
                         kind,
                         index,
-                        pct: pct as f32,
+                        pct: pct.unwrap_or(0) as f32,
                     });
                 }
                 last_pct = pct;

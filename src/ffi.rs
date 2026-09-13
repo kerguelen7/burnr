@@ -239,6 +239,8 @@ pub struct RawLibburn {
     pub drive_scan: unsafe extern "C" fn(*mut *mut DriveInfo, *mut c_uint) -> c_int,
     pub drive_info_free: unsafe extern "C" fn(*mut DriveInfo),
     pub drive_get_adr: unsafe extern "C" fn(*mut DriveInfo, *mut c_char) -> c_int,
+    pub drive_get_all_profiles:
+        unsafe extern "C" fn(*mut BurnDrive, *mut c_int, *mut c_int, *mut c_char) -> c_int,
     pub drive_grab: unsafe extern "C" fn(*mut BurnDrive, c_int) -> c_int,
     pub drive_release: unsafe extern "C" fn(*mut BurnDrive, c_int),
     pub disc_get_status: unsafe extern "C" fn(*mut BurnDrive) -> c_int,
@@ -355,6 +357,11 @@ impl RawLibburn {
                 lib,
                 "burn_drive_get_adr",
                 unsafe extern "C" fn(*mut DriveInfo, *mut c_char) -> c_int
+            );
+            let drive_get_all_profiles = resolve!(
+                lib,
+                "burn_drive_get_all_profiles",
+                unsafe extern "C" fn(*mut BurnDrive, *mut c_int, *mut c_int, *mut c_char) -> c_int
             );
             let drive_grab = resolve!(
                 lib,
@@ -645,6 +652,7 @@ impl RawLibburn {
                 drive_scan,
                 drive_info_free,
                 drive_get_adr,
+                drive_get_all_profiles,
                 drive_grab,
                 drive_release,
                 disc_get_status,
@@ -741,5 +749,64 @@ pub(crate) mod tests {
             assert!(maj > 0, "burn_version moet een geldige versie geven");
             (raw.finish)();
         }
+    }
+
+    /// Test de toggle-keten van “Exclusief openen”: herladen (burn_finish →
+    /// initialize) moet opnieuw LibLoaded geven en daarna moet een scan
+    /// gewoon werken.
+    #[test]
+    fn worker_toggle_exclusive_reload() {
+        use crate::worker::{Command, Event, spawn};
+        use std::sync::mpsc::channel;
+        use std::time::Duration;
+
+        let _guard = LIBBURN_LOCK.lock().unwrap();
+        let (cmd_tx, cmd_rx) = channel::<Command>();
+        let (event_tx, event_rx) = channel::<Event>();
+        let _handle = spawn(cmd_rx, event_tx, egui::Context::default());
+
+        cmd_tx
+            .send(Command::LoadLibrary {
+                path: None,
+                exclusive: true,
+            })
+            .unwrap();
+
+        let (mut loaded1, mut loaded2, mut scan_done) = (false, false, false);
+        let mut sent_reload = false;
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        while std::time::Instant::now() < deadline {
+            match event_rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(Event::LibLoaded { .. }) => {
+                    if !sent_reload {
+                        loaded1 = true;
+                        sent_reload = true;
+                        cmd_tx
+                            .send(Command::LoadLibrary {
+                                path: None,
+                                exclusive: false,
+                            })
+                            .unwrap();
+                    } else {
+                        loaded2 = true;
+                        cmd_tx.send(Command::Scan).unwrap();
+                    }
+                }
+                Ok(Event::ScanDone { .. }) => {
+                    scan_done = true;
+                    break;
+                }
+                Ok(Event::LibLoadFailed { error }) => {
+                    panic!("herladen mislukt: {error}");
+                }
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+        drop(cmd_tx);
+        assert!(
+            loaded1 && loaded2 && scan_done,
+            "toggle-keten faalde: eerste load={loaded1}, herload={loaded2}, scan={scan_done}"
+        );
     }
 }

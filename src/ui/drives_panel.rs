@@ -34,7 +34,19 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
             if app.drives.is_empty() && app.scan_state != ScanState::Scanning {
                 match &app.lib_state {
                     LibState::Loaded { .. } => {
-                        ui.weak("Geen stations gevonden. Sluit een brander aan en scan opnieuw.");
+                        if app.exclusive_open {
+                            ui.colored_label(
+                                colors::WARN,
+                                "Geen stations gevonden terwijl “Exclusief openen” \
+                                 aan staat. Een aangekoppelde schijf (automount) kan \
+                                 de drive blokkeren — zet de modus uit \
+                                 (Instellingen → Apparaat) en scan opnieuw.",
+                            );
+                        } else {
+                            ui.weak(
+                                "Geen stations gevonden. Sluit een brander aan en scan opnieuw.",
+                            );
+                        }
                     }
                     _ => {
                         ui.weak("Stations verschijnen hier zodra libburn geladen is.");
@@ -64,16 +76,21 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                     };
                     let label = egui::RichText::new(format!("{title}\n{sub}"));
 
-                    let resp = ui.add(egui::Button::selectable(selected, label));
-                    // Statusstip linksboven in de rij.
-                    let rect = egui::Rect::from_min_size(
-                        resp.rect.left_top() + egui::vec2(2.0, 6.0),
-                        egui::vec2(6.0, 6.0),
-                    );
-                    ui.painter().circle_filled(rect.center(), 3.0, dot);
-                    if resp.clicked() {
-                        app.selected = Some(d.index);
-                    }
+                    // Knop krijgt de breedte minus de LED-kolom, zodat het
+                    // statusstip nooit over de tekst heen valt.
+                    ui.horizontal(|ui| {
+                        let btn_w = (ui.available_width() - 16.0).max(80.0);
+                        let resp = ui.add_sized(
+                            egui::vec2(btn_w, 38.0),
+                            egui::Button::selectable(selected, label),
+                        );
+                        if resp.clicked() {
+                            app.selected = Some(d.index);
+                        }
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
+                        ui.painter().circle_filled(rect.center(), 3.5, dot);
+                    });
                 }
             });
         });

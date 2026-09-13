@@ -89,7 +89,13 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App) {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.label("Padding (KiB):");
-                ui.add(egui::DragValue::new(&mut s.padding_kib).range(0..=100_000));
+                ui.add(egui::DragValue::new(&mut s.padding_kib).range(0..=100_000))
+                    .on_hover_text(
+                        "Schrijft deze hoeveelheid nullen achter de trackdata \
+                         (tail). Voor data-discs is 0 normaal; enkele KiB kan \
+                         helpen bij bepaalde oude CD-spelers of audio-brandingen. \
+                         Heeft geen invloed op multi-session.",
+                    );
             });
 
             ui.add_space(4.0);
@@ -113,6 +119,14 @@ fn device_section(ui: &mut egui::Ui, app: &mut App) {
             {
                 app.set_exclusive_open(want);
             }
+            ui.weak(format!(
+                "Huidige modus: {}",
+                if app.exclusive_open {
+                    "exclusief (O_EXCL)"
+                } else {
+                    "niet-exclusief"
+                }
+            ));
             ui.weak(
                 "Uitzetten als de bestandsbeheerder de schijf aankoppelt \
                  (automount, bijv. Nemo/udisks2).",
