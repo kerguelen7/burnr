@@ -76,21 +76,22 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                     };
                     let label = egui::RichText::new(format!("{title}\n{sub}"));
 
-                    // Knop krijgt de breedte minus de LED-kolom, zodat het
-                    // statusstip nooit over de tekst heen valt.
-                    ui.horizontal(|ui| {
-                        let btn_w = (ui.available_width() - 16.0).max(80.0);
-                        let resp = ui.add_sized(
-                            egui::vec2(btn_w, 38.0),
-                            egui::Button::selectable(selected, label),
-                        );
-                        if resp.clicked() {
-                            app.selected = Some(d.index);
-                        }
-                        let (rect, _) =
-                            ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
-                        ui.painter().circle_filled(rect.center(), 3.5, dot);
-                    });
+                    // Knop over de volle breedte; de LED wordt alleen
+                    // GEPAINT op de vaste rechterrand van de rij. Een aparte
+                    // widget-allocatie voor de LED zou de minimale
+                    // rij-breedte boven de panelbreedte brengen en het panel
+                    // elke frame laten groeien (runaway-groei).
+                    let resp = ui.add_sized(
+                        egui::vec2(ui.available_width(), 38.0),
+                        egui::Button::selectable(selected, label),
+                    );
+                    if resp.clicked() {
+                        app.selected = Some(d.index);
+                    }
+                    let x = ui.max_rect().right() - 8.0;
+                    let y = resp.rect.top() + 10.0;
+                    ui.painter()
+                        .circle_filled(egui::pos2(x, y), 3.5, dot);
                 }
             });
         });
