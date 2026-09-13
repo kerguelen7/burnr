@@ -90,6 +90,14 @@ impl ActiveBurn {
     }
 }
 
+/// Lopende onderhoudsjob (wissen/formatteren, stap 6).
+#[derive(Clone, Debug)]
+pub struct MaintJob {
+    pub kind: crate::worker::MaintKind,
+    pub index: usize,
+    pub pct: f32,
+}
+
 pub struct App {
     pub log: LogStore,
     pub lib_state: LibState,
@@ -104,6 +112,8 @@ pub struct App {
     pub read_path: String,
     /// Lopend brandjob (één tegelijk).
     pub active_burn: Option<ActiveBurn>,
+    /// Lopende onderhoudsjob (wissen/formatteren).
+    pub active_maint: Option<MaintJob>,
     /// Pad naar het ISO-bestand om te branden.
     pub burn_path: String,
     /// Bronkeuze voor het branden.
@@ -154,6 +164,7 @@ impl App {
             active_read: None,
             read_path: String::new(),
             active_burn: None,
+            active_maint: None,
             burn_path: String::new(),
             burn_source_kind: BurnSourceKind::IsoFile,
             burn_files: Vec::new(),
@@ -295,6 +306,47 @@ impl App {
                 .push(Level::Info, "Brandjob annuleren aangevraagd".to_string());
             self.send(Command::CancelBurn);
         }
+    }
+
+    pub fn cancel_maint(&mut self) {
+        if self.active_maint.is_some() {
+            self.log.push(
+                Level::Info,
+                "Onderhoudsjob annuleren aangevraagd".to_string(),
+            );
+            self.send(Command::CancelBurn);
+        }
+    }
+
+    pub fn request_erase(&mut self, index: usize, fast: bool) {
+        if self.active_maint.is_some()
+            || self.active_burn.is_some()
+            || self.active_read.is_some()
+            || self.busy_drive.is_some()
+        {
+            return;
+        }
+        self.log.push(
+            Level::Info,
+            format!(
+                "Wissen aangevraagd voor station {index} ({})",
+                if fast { "snel" } else { "volledig" }
+            ),
+        );
+        self.send(Command::EraseDisc { index, fast });
+    }
+
+    pub fn request_format(&mut self, index: usize) {
+        if self.active_maint.is_some()
+            || self.active_burn.is_some()
+            || self.active_read.is_some()
+            || self.busy_drive.is_some()
+        {
+            return;
+        }
+        self.log
+            .push(Level::Info, "Formatteren aangevraagd".to_string());
+        self.send(Command::FormatDisc { index });
     }
 
     /// Voeg een bestand/map toe aan de data-selectie (geen duplicaten).
@@ -550,6 +602,32 @@ impl App {
                 self.burn_led = JobLed::Idle;
                 self.active_burn = None;
             }
+            Event::MaintStarted { kind, index } => {
+                self.active_maint = Some(MaintJob {
+                    kind,
+                    index,
+                    pct: 0.0,
+                });
+            }
+            Event::MaintProgress { kind, index, pct } => {
+                if let Some(m) = self.active_maint.as_mut() {
+                    if m.kind == kind && m.index == index {
+                        m.pct = pct;
+                    }
+                }
+            }
+            Event::MaintDone { .. } => {
+                self.active_maint = None;
+            }
+            Event::MaintFailed { index, error, .. } => {
+                self.active_maint = None;
+                if let Some(d) = self.drives.get_mut(index) {
+                    d.inspect_error = Some(error);
+                }
+            }
+            Event::MaintCancelled { .. } => {
+                self.active_maint = None;
+            }
             Event::WorkerStopped => {}
         }
     }
@@ -568,7 +646,8 @@ impl eframe::App for App {
             || self.scan_state == ScanState::Scanning
             || self.busy_drive.is_some()
             || self.active_read.is_some()
-            || self.active_burn.is_some();
+            || self.active_burn.is_some()
+            || self.active_maint.is_some();
         if busy {
             ctx.request_repaint_after(Duration::from_millis(80));
         }

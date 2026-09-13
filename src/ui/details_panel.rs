@@ -295,6 +295,10 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
             ui.add_space(4.0);
             toc_section(ui, media);
 
+            ui.add_space(6.0);
+            ui.separator();
+            maint_section(ui, app, d);
+
             if media.speeds.is_empty() {
                 ui.weak("Geen snelheidsinformatie beschikbaar.");
             } else {
@@ -575,6 +579,76 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
         "Gebruikt de instellingen rechts: snelheid, schrijfmodus, simulatie, \
          multi-session, padding, wissen vooraf.",
     );
+}
+
+/// Onderhoud-sectie (stap 6): losse wis- en format-acties op de media.
+fn maint_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
+    use crate::worker::{profile_is_formattable, profile_is_overwritable, profile_is_rewritable};
+
+    ui.label(egui::RichText::new("Onderhoud").strong());
+
+    if let Some(m) = app.active_maint.clone() {
+        if m.index == d.index {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(format!("Media {}…", m.kind.label()));
+                if m.pct > 0.0 {
+                    ui.label(format!("{:.0}%", m.pct));
+                }
+                if ui.button("⏹ Annuleren").clicked() {
+                    app.cancel_maint();
+                }
+            });
+        } else {
+            ui.weak("Er draait een onderhoudsjob op een ander station.");
+        }
+        return;
+    }
+
+    let profile = d.media.as_ref().map(|m| m.profile_no).unwrap_or(0);
+    let rewritable = d
+        .media
+        .as_ref()
+        .is_some_and(|m| m.erasable || profile_is_rewritable(m.profile_no));
+    let overwritable = profile_is_overwritable(profile);
+    let formattable = profile_is_formattable(profile);
+    let ready = app.scan_state == ScanState::Done
+        && app.busy_drive.is_none()
+        && app.active_read.is_none()
+        && app.active_burn.is_none();
+
+    // Wissen: alleen zinvol op herbeschrijfbare media die niet direct
+    // overschrijfbaar is (CD-RW, DVD-RW sequentieel). Voor overschrijfbare
+    // media (DVD+RW, DVD-RAM, BD-RE) is formatteren de juiste actie.
+    let can_erase = ready && rewritable && !overwritable;
+
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(can_erase, egui::Button::new("🧽 Wissen (snel)"))
+            .clicked()
+        {
+            app.request_erase(d.index, true);
+        }
+        if ui
+            .add_enabled(can_erase, egui::Button::new("🧽 Wissen (volledig)"))
+            .clicked()
+        {
+            app.request_erase(d.index, false);
+        }
+        if ui
+            .add_enabled(ready && formattable, egui::Button::new("⚙ Formatteren"))
+            .clicked()
+        {
+            app.request_format(d.index);
+        }
+    });
+    if !ready {
+        ui.weak("(eerst een scan uitvoeren)");
+    } else if overwritable {
+        ui.weak("Direct overschrijfbare media hoeft niet gewist te worden — formatteren herstelt de schijf.");
+    } else if !rewritable && !formattable {
+        ui.weak("Deze media is niet herbeschrijfbaar — wissen/formatteren is niet mogelijk.");
+    }
 }
 
 /// TOC-weergave: per sessie de tracks met type, startadres en grootte.

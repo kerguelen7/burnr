@@ -291,7 +291,6 @@ pub(crate) mod tests {
             let root = (iso.image_get_root)(image);
 
             let dirpath = tmp.to_str().unwrap();
-            let dir_c = std::ffi::CString::new(dirpath).unwrap();
             let name_c = std::ffi::CString::new("testmap").unwrap();
 
             let mut dir: *mut IsoDir = std::ptr::null_mut();
@@ -361,7 +360,7 @@ pub(crate) mod tests {
 
             // Opruimen: burn_source_free komt uit libburn.
             if let Ok(burn) = crate::ffi::RawLibburn::load("libburn.so.4") {
-                unsafe { (burn.source_free)(src) };
+                (burn.source_free)(src);
             }
             (iso.write_opts_free)(opts);
             (iso.image_unref)(image);

@@ -97,9 +97,12 @@ cargo build --release
   zichtbaar na 100%), compacte apparaatinfo (technische details inklapbaar),
   file pickers via `rfd`, en de “eilanden”-herindeling van het centrale
   paneel (Station & media / Branden / Schijfkopie).
-- [ ] **Stap 6 — Wissen/formatteren**: losse knoppen voor `burn_disc_erase`
-  (snel/volledig) en `burn_disc_format`; de wis-machinery bestaat al in de
-  brand-flow.
+- [x] **Stap 6 — Wissen/formatteren**: losse 🧽-acties in het media-eiland:
+  wissen (snel/volledig) voor CD-RW en DVD-RW sequentieel, formatteren
+  (`burn_disc_format`, standaardgrootte) voor DVD-RW/DVD+RW/DVD-RAM/BD-RE.
+  Slimme knop-activering per profiel (overschrijfbare media → formatteren
+  i.p.v. wissen), voortgang in log én UI, annuleren, en de wis-flow van de
+  brand-flow deelt nu één gedeelde wachtlus.
 - [ ] **Stap 7 (optie) — Bestanden toevoegen aan overschrijfbare media
   (grow)**: bestanden toevoegen aan een beschreven DVD+RW/DVD-RAM/BD-RE met
   behoud van de oude inhoud. NB: dit is géén multi-session (die media heeft

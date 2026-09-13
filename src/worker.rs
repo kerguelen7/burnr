@@ -159,6 +159,15 @@ pub enum Command {
         volume_id: String,
         settings: BurnSettings,
     },
+    /// Wis de media los van een brandjob (stap 6).
+    EraseDisc {
+        index: usize,
+        fast: bool,
+    },
+    /// Formatteer de media los van een brandjob (stap 6).
+    FormatDisc {
+        index: usize,
+    },
     /// Bezig lopende brandjob annuleren.
     CancelBurn,
     Shutdown,
@@ -233,7 +242,51 @@ pub enum Event {
         error: String,
     },
     BurnCancelled,
+    /// Onderhoudsjob (stap 6): wissen of formatteren los van het branden.
+    MaintStarted {
+        kind: MaintKind,
+        index: usize,
+    },
+    MaintProgress {
+        kind: MaintKind,
+        index: usize,
+        pct: f32,
+    },
+    MaintDone {
+        #[allow(dead_code)]
+        kind: MaintKind,
+        #[allow(dead_code)]
+        index: usize,
+    },
+    MaintFailed {
+        #[allow(dead_code)]
+        kind: MaintKind,
+        index: usize,
+        error: String,
+    },
+    MaintCancelled {
+        #[allow(dead_code)]
+        kind: MaintKind,
+        #[allow(dead_code)]
+        index: usize,
+    },
     WorkerStopped,
+}
+
+/// Soort onderhoudsjob.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MaintKind {
+    Erase,
+    Format,
+}
+
+impl MaintKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            MaintKind::Erase => "wissen",
+            MaintKind::Format => "formatteren",
+        }
+    }
 }
 
 /// Start de worker-thread.
@@ -331,8 +384,14 @@ fn run(cmds: Receiver<Command>, events: Sender<Event>, ctx: egui::Context) {
             Command::CancelBurn => {
                 notify.log(
                     Level::Warning,
-                    "Annuleren gevraagd, maar er is geen brandjob bezig",
+                    "Annuleren gevraagd, maar er is geen job bezig",
                 );
+            }
+            Command::EraseDisc { index, fast } => {
+                erase_job(&state, index, fast, &cmds, &mut pending, &notify)
+            }
+            Command::FormatDisc { index } => {
+                format_job(&state, index, &cmds, &mut pending, &notify)
             }
             Command::Shutdown => shutdown = true,
         }
@@ -1531,56 +1590,25 @@ fn grab_and_check_media(
                 ),
             );
             unsafe { (st.raw.disc_erase)(di.drive, fast as c_int) };
-            let mut erase_cancelled = false;
-            loop {
-                match cmds.try_recv() {
-                    Ok(Command::CancelBurn) => {
-                        unsafe { (st.raw.drive_cancel)(di.drive) };
-                        erase_cancelled = true;
-                        break;
-                    }
-                    Ok(Command::Shutdown) => {
-                        pending.push_front(Command::Shutdown);
-                        unsafe { (st.raw.drive_cancel)(di.drive) };
-                        erase_cancelled = true;
-                        break;
-                    }
-                    Ok(other) => pending.push_back(other),
-                    Err(TryRecvError::Empty) => {}
-                    Err(TryRecvError::Disconnected) => {
-                        erase_cancelled = true;
-                        break;
-                    }
+            let well = match wait_media_job(
+                st,
+                di.drive,
+                "Wissen",
+                DriveStatus::Erasing,
+                None,
+                cmds,
+                pending,
+                notify,
+            ) {
+                Ok(w) => w,
+                Err(()) => {
+                    unsafe { (st.raw.drive_release)(di.drive, 0) };
+                    notify.log(Level::Warning, "Brandjob geannuleerd tijdens wissen");
+                    notify.send(Event::BurnCancelled);
+                    return Err(());
                 }
-                thread::sleep(Duration::from_millis(150));
-                drain_msgs(&st.raw, notify);
-                let mut prog = Progress::default();
-                let ds = DriveStatus::from_raw(unsafe {
-                    (st.raw.drive_get_status)(di.drive, &mut prog)
-                });
-                if ds == DriveStatus::Idle {
-                    break;
-                }
-                if ds == DriveStatus::Erasing {
-                    // Voortgang van het wissen: relatieve stappen 0..0x10000.
-                    notify.log(
-                        Level::Info,
-                        format!(
-                            "Wissen… {}%",
-                            (prog.sector as f32 / 0x10000 as f32 * 100.0).min(100.0) as i32
-                        ),
-                    );
-                }
-            }
-            if erase_cancelled {
-                unsafe { (st.raw.drive_release)(di.drive, 0) };
-                notify.log(Level::Warning, "Brandjob geannuleerd tijdens wissen");
-                notify.send(Event::BurnCancelled);
-                return Err(());
-            }
-            let well = unsafe { (st.raw.drive_wrote_well)(di.drive) } == 1;
+            };
             unsafe { (st.raw.drive_re_assess)(di.drive, 0) };
-            drain_msgs(&st.raw, notify);
             if !well {
                 let msg = "Wissen mislukt — brandjob afgebroken".to_string();
                 notify.log(Level::Error, &msg);
@@ -2072,6 +2100,316 @@ pub fn profile_is_rewritable(pno: i32) -> bool {
 /// DVD-RW schrijven gewoon over de oude data heen).
 pub fn profile_is_overwritable(pno: i32) -> bool {
     matches!(pno, 0x12 | 0x13 | 0x1A | 0x43)
+}
+
+/// Draait een wis- of format-job en pollt tot de drive weer IDLE is.
+/// Stuurt MaintProgress-events (als kind/index bekend zijn), handelt
+/// annuleren/afsluiten af en geeft de resultaatcheck terug. Err betekent
+/// geannuleerd/verbinding weg (de drive is dan al gecanceld).
+fn wait_media_job(
+    st: &WorkerState,
+    drive: *mut ffi::BurnDrive,
+    label: &str,
+    busy_status: DriveStatus,
+    maint: Option<(MaintKind, usize)>,
+    cmds: &Receiver<Command>,
+    pending: &mut VecDeque<Command>,
+    notify: &Notifier,
+) -> Result<bool, ()> {
+    let mut last_pct: i32 = -1;
+    loop {
+        match cmds.try_recv() {
+            Ok(Command::CancelBurn) => {
+                unsafe { (st.raw.drive_cancel)(drive) };
+                return Err(());
+            }
+            Ok(Command::Shutdown) => {
+                pending.push_front(Command::Shutdown);
+                unsafe { (st.raw.drive_cancel)(drive) };
+                return Err(());
+            }
+            Ok(other) => pending.push_back(other),
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => {
+                unsafe { (st.raw.drive_cancel)(drive) };
+                return Err(());
+            }
+        }
+        thread::sleep(Duration::from_millis(150));
+        drain_msgs(&st.raw, notify);
+        let mut prog = Progress::default();
+        let ds = DriveStatus::from_raw(unsafe { (st.raw.drive_get_status)(drive, &mut prog) });
+        if ds == DriveStatus::Idle {
+            break;
+        }
+        if ds == busy_status && prog.sectors > 0 {
+            let pct = ((prog.sector as f32 / prog.sectors as f32) * 100.0).min(100.0) as i32;
+            if pct != last_pct {
+                notify.log(Level::Info, format!("{label}… {pct}%"));
+                if let Some((kind, index)) = maint {
+                    notify.send(Event::MaintProgress {
+                        kind,
+                        index,
+                        pct: pct as f32,
+                    });
+                }
+                last_pct = pct;
+            }
+        }
+    }
+    Ok(unsafe { (st.raw.drive_wrote_well)(drive) } == 1)
+}
+
+/// Wis de media los van een brandjob (stap 6).
+fn erase_job(
+    state: &Option<WorkerState>,
+    index: usize,
+    fast: bool,
+    cmds: &Receiver<Command>,
+    pending: &mut VecDeque<Command>,
+    notify: &Notifier,
+) {
+    let Some(st) = state else {
+        notify.log(
+            Level::Warning,
+            "Wissen aangevraagd, maar libburn is niet geladen",
+        );
+        return;
+    };
+    if st.infos.is_null() || index >= st.n_drives {
+        notify.log(
+            Level::Warning,
+            format!("Wissen aangevraagd voor onbekend station {index}"),
+        );
+        return;
+    }
+    let di = unsafe { *st.infos.add(index) };
+    notify.send(Event::MaintStarted {
+        kind: MaintKind::Erase,
+        index,
+    });
+    notify.log(
+        Level::Info,
+        format!(
+            "Station {index}: media wissen ({})…",
+            if fast { "snel" } else { "volledig" }
+        ),
+    );
+
+    let grabbed = unsafe { (st.raw.drive_grab)(di.drive, 0) } == 1;
+    if !grabbed {
+        let adr = unsafe { adr_of(&di, &st.raw) };
+        let msg = format!(
+            "Grab mislukt voor {} — drive mogelijk bezet (bijv. automount). \
+             Zet “Exclusief openen” uit of unmount de schijf.",
+            if adr.is_empty() {
+                format!("station {index}")
+            } else {
+                adr.clone()
+            }
+        );
+        notify.log(Level::Error, &msg);
+        notify.send(Event::MaintFailed {
+            kind: MaintKind::Erase,
+            index,
+            error: msg,
+        });
+        return;
+    }
+
+    let mut profile_no: c_int = 0;
+    let mut pname = [0 as c_char; 80];
+    let _ = unsafe { (st.raw.disc_get_profile)(di.drive, &mut profile_no, pname.as_mut_ptr()) };
+    if profile_is_overwritable(profile_no) {
+        let msg = format!(
+            "Media (profiel 0x{:02X}) is direct overschrijfbaar — wissen is niet \
+             nodig; gebruik “Formatteren” om de schijf te herstellen",
+            profile_no
+        );
+        notify.log(Level::Error, &msg);
+        unsafe { (st.raw.drive_release)(di.drive, 0) };
+        notify.send(Event::MaintFailed {
+            kind: MaintKind::Erase,
+            index,
+            error: msg,
+        });
+        return;
+    }
+    let erasable =
+        unsafe { (st.raw.disc_erasable)(di.drive) } != 0 || profile_is_rewritable(profile_no);
+    if !erasable {
+        let msg = "Deze media is niet herbeschrijfbaar — wissen is niet mogelijk".to_string();
+        notify.log(Level::Error, &msg);
+        unsafe { (st.raw.drive_release)(di.drive, 0) };
+        notify.send(Event::MaintFailed {
+            kind: MaintKind::Erase,
+            index,
+            error: msg,
+        });
+        return;
+    }
+
+    unsafe { (st.raw.disc_erase)(di.drive, fast as c_int) };
+    let well = match wait_media_job(
+        st,
+        di.drive,
+        "Wissen",
+        DriveStatus::Erasing,
+        Some((MaintKind::Erase, index)),
+        cmds,
+        pending,
+        notify,
+    ) {
+        Ok(w) => w,
+        Err(()) => {
+            unsafe { (st.raw.drive_release)(di.drive, 0) };
+            notify.log(Level::Warning, "Wissen geannuleerd");
+            notify.send(Event::MaintCancelled {
+                kind: MaintKind::Erase,
+                index,
+            });
+            return;
+        }
+    };
+    unsafe { (st.raw.drive_re_assess)(di.drive, 0) };
+    drain_msgs(&st.raw, notify);
+    unsafe { (st.raw.drive_release)(di.drive, 0) };
+
+    if well {
+        notify.log(Level::Success, "Media gewist");
+        notify.send(Event::MaintDone {
+            kind: MaintKind::Erase,
+            index,
+        });
+    } else {
+        let msg = "Wissen mislukt — zie de libburn-meldingen hierboven".to_string();
+        notify.log(Level::Error, &msg);
+        notify.send(Event::MaintFailed {
+            kind: MaintKind::Erase,
+            index,
+            error: msg,
+        });
+    }
+}
+
+/// Profielen waarop formatteren zinvol heeft (DVD-RW seq → RO, DVD-RW RO,
+/// DVD+RW, DVD-RAM, BD-RE).
+pub fn profile_is_formattable(pno: i32) -> bool {
+    matches!(pno, 0x12 | 0x13 | 0x14 | 0x1A | 0x43)
+}
+
+/// Formatteer de media los van een brandjob (stap 6).
+fn format_job(
+    state: &Option<WorkerState>,
+    index: usize,
+    cmds: &Receiver<Command>,
+    pending: &mut VecDeque<Command>,
+    notify: &Notifier,
+) {
+    let Some(st) = state else {
+        notify.log(
+            Level::Warning,
+            "Formatteren aangevraagd, maar libburn is niet geladen",
+        );
+        return;
+    };
+    if st.infos.is_null() || index >= st.n_drives {
+        notify.log(
+            Level::Warning,
+            format!("Formatteren aangevraagd voor onbekend station {index}"),
+        );
+        return;
+    }
+    let di = unsafe { *st.infos.add(index) };
+    notify.send(Event::MaintStarted {
+        kind: MaintKind::Format,
+        index,
+    });
+    notify.log(Level::Info, "Media formatteren (standaardgrootte)…");
+
+    let grabbed = unsafe { (st.raw.drive_grab)(di.drive, 0) } == 1;
+    if !grabbed {
+        let adr = unsafe { adr_of(&di, &st.raw) };
+        let msg = format!(
+            "Grab mislukt voor {} — drive mogelijk bezet (bijv. automount). \
+             Zet “Exclusief openen” uit (Instellingen → Apparaat) \
+             of unmount de schijf.",
+            if adr.is_empty() {
+                format!("station {index}")
+            } else {
+                adr.clone()
+            }
+        );
+        notify.log(Level::Error, &msg);
+        notify.send(Event::MaintFailed {
+            kind: MaintKind::Format,
+            index,
+            error: msg,
+        });
+        return;
+    }
+
+    let mut profile_no: c_int = 0;
+    let mut pname = [0 as c_char; 80];
+    let _ = unsafe { (st.raw.disc_get_profile)(di.drive, &mut profile_no, pname.as_mut_ptr()) };
+    if !profile_is_formattable(profile_no) {
+        let msg = format!(
+            "Formatteren is niet van toepassing op deze media (profiel 0x{:02X}) \
+             — voor CD-RW/DVD-RW sequentieel is “Wissen” de juiste actie",
+            profile_no
+        );
+        notify.log(Level::Error, &msg);
+        unsafe { (st.raw.drive_release)(di.drive, 0) };
+        notify.send(Event::MaintFailed {
+            kind: MaintKind::Format,
+            index,
+            error: msg,
+        });
+        return;
+    }
+
+    // size 0 + size-mode 3 (bit1+2 = 3) = formatteren naar standaardgrootte.
+    unsafe { (st.raw.disc_format)(di.drive, 0, 3 << 1) };
+    let well = match wait_media_job(
+        st,
+        di.drive,
+        "Formatteren",
+        DriveStatus::Formatting,
+        Some((MaintKind::Format, index)),
+        cmds,
+        pending,
+        notify,
+    ) {
+        Ok(w) => w,
+        Err(()) => {
+            unsafe { (st.raw.drive_release)(di.drive, 0) };
+            notify.log(Level::Warning, "Formatteren geannuleerd");
+            notify.send(Event::MaintCancelled {
+                kind: MaintKind::Format,
+                index,
+            });
+            return;
+        }
+    };
+    unsafe { (st.raw.drive_re_assess)(di.drive, 0) };
+    drain_msgs(&st.raw, notify);
+    unsafe { (st.raw.drive_release)(di.drive, 0) };
+
+    if well {
+        notify.log(Level::Success, "Media geformatteerd");
+        notify.send(Event::MaintDone {
+            kind: MaintKind::Format,
+            index,
+        });
+    } else {
+        let msg = "Formatteren mislukt — zie de libburn-meldingen hierboven".to_string();
+        notify.log(Level::Error, &msg);
+        notify.send(Event::MaintFailed {
+            kind: MaintKind::Format,
+            index,
+            error: msg,
+        });
+    }
 }
 
 /// Maakt een schijfkopie van de datamedia naar een bestand.

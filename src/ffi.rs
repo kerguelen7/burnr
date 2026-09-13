@@ -299,6 +299,7 @@ pub struct RawLibburn {
         unsafe extern "C" fn(*mut BurnWriteOpts, *mut BurnDisc, *mut c_char, c_int) -> c_int,
     pub disc_write: unsafe extern "C" fn(*mut BurnWriteOpts, *mut BurnDisc),
     pub disc_erase: unsafe extern "C" fn(*mut BurnDrive, c_int),
+    pub disc_format: unsafe extern "C" fn(*mut BurnDrive, c_longlong, c_int),
     pub drive_set_speed: unsafe extern "C" fn(*mut BurnDrive, c_int, c_int),
     pub drive_cancel: unsafe extern "C" fn(*mut BurnDrive),
     pub drive_wrote_well: unsafe extern "C" fn(*mut BurnDrive) -> c_int,
@@ -589,6 +590,11 @@ impl RawLibburn {
                 "burn_disc_erase",
                 unsafe extern "C" fn(*mut BurnDrive, c_int)
             );
+            let disc_format = resolve!(
+                lib,
+                "burn_disc_format",
+                unsafe extern "C" fn(*mut BurnDrive, c_longlong, c_int)
+            );
             let drive_set_speed = resolve!(
                 lib,
                 "burn_drive_set_speed",
@@ -683,6 +689,7 @@ impl RawLibburn {
                 precheck_write,
                 disc_write,
                 disc_erase,
+                disc_format,
                 drive_set_speed,
                 drive_cancel,
                 drive_wrote_well,
