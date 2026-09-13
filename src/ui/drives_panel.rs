@@ -34,13 +34,24 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
             if app.drives.is_empty() && app.scan_state != ScanState::Scanning {
                 match &app.lib_state {
                     LibState::Loaded { .. } => {
-                        if app.exclusive_open {
+                        if app.exclusive_open && app.last_scan_found > 0 {
+                            // Een eerdere scan vond wél een station — dus de
+                            // drive bestaat en wordt nu geblokkeerd: de
+                            // automount-hint is dan bewijsbaar juist.
                             ui.colored_label(
                                 colors::WARN,
                                 "Geen stations gevonden terwijl “Exclusief openen” \
                                  aan staat. Een aangekoppelde schijf (automount) kan \
                                  de drive blokkeren — zet de modus uit \
                                  (Instellingen → Apparaat) en scan opnieuw.",
+                            );
+                        } else if app.exclusive_open {
+                            ui.weak(
+                                "Geen stations gevonden. Mogelijke oorzaken: geen \
+                                 brander aangesloten; of een aangekoppelde schijf \
+                                 blokkeert de drive terwijl “Exclusief openen” aan \
+                                 staat (zet de modus uit in Instellingen → Apparaat \
+                                 en scan opnieuw).",
                             );
                         } else {
                             ui.weak(
@@ -90,8 +101,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                     }
                     let x = ui.max_rect().right() - 8.0;
                     let y = resp.rect.top() + 10.0;
-                    ui.painter()
-                        .circle_filled(egui::pos2(x, y), 3.5, dot);
+                    ui.painter().circle_filled(egui::pos2(x, y), 3.5, dot);
                 }
             });
         });

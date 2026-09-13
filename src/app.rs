@@ -129,6 +129,10 @@ pub struct App {
     pub settings: BurnSettings,
     /// Drives exclusief openen (O_EXCL)? Uitzetten bij automount-conflicten.
     pub exclusive_open: bool,
+    /// Aantal stations dat de LAATSTE voltooide scan vond — gebruikt om de
+    /// "automount blokkeert de drive"-hint alleen te tonen als we weten dat
+    /// er eerder wél een station was.
+    pub last_scan_found: usize,
 
     cmd_tx: Sender<Command>,
     events: Receiver<Event>,
@@ -173,6 +177,7 @@ impl App {
             burn_led: JobLed::Idle,
             settings: BurnSettings::default(),
             exclusive_open: true,
+            last_scan_found: 0,
             cmd_tx,
             events: event_rx,
             worker: Some(handle),
@@ -475,6 +480,7 @@ impl App {
             }
             Event::ScanDone { drives } => {
                 self.scan_state = ScanState::Done;
+                self.last_scan_found = drives.len();
                 self.selected = if drives.is_empty() { None } else { Some(0) };
                 self.drives = drives;
             }
