@@ -2368,8 +2368,16 @@ fn format_job(
         return;
     }
 
-    // size 0 + size-mode 3 (bit1+2 = 3) = formatteren naar standaardgrootte.
-    unsafe { (st.raw.disc_format)(di.drive, 0, 3 << 1) };
+    // Volledige format met enforce-re-format (bit4): bij DVD+RW/BD-RE/DVD-RAM
+    // ziet libburn een al geformatteerde schijf anders als no-op
+    // ("FORMAT UNIT ignored. Already completed."). Bit4 forceert de "de-ice"
+    // — de bestaande data wordt gewist. size-mode 3 (bit1+2) = standaardgrootte.
+    notify.log(
+        Level::Info,
+        "Volledige format — bestaande data wordt gewist; dit kan enkele \
+         minuten duren…",
+    );
+    unsafe { (st.raw.disc_format)(di.drive, 0, (3 << 1) | (1 << 4)) };
     let well = match wait_media_job(
         st,
         di.drive,

@@ -637,6 +637,10 @@ fn maint_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry
         }
         if ui
             .add_enabled(ready && formattable, egui::Button::new("⚙ Formatteren"))
+            .on_hover_text(
+                "Volledige format: wist alle data op de schijf en herstelt de \
+                 format-structuren. Kan enkele minuten of langer duren.",
+            )
             .clicked()
         {
             app.request_format(d.index);
