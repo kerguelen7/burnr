@@ -1201,6 +1201,7 @@ fn burn_job(
         };
 
     // Branden starten en poll-lus draaien (gedeelde helper).
+    let adr = unsafe { adr_of(&di, &st.raw) };
     unsafe {
         run_write_poll(
             st,
@@ -1212,6 +1213,7 @@ fn burn_job(
             fifo,
             index,
             expected_sectors,
+            &adr,
             s,
             cmds,
             pending,
@@ -1593,6 +1595,7 @@ fn burn_files_job(
     };
 
     // Branden (gedeelde poll-lus); daarna libisofs-objecten vrijgeven.
+    let adr = unsafe { adr_of(&di, &st.raw) };
     unsafe {
         run_write_poll(
             st,
@@ -1604,6 +1607,7 @@ fn burn_files_job(
             src,
             index,
             expected_sectors,
+            &adr,
             s,
             cmds,
             pending,
@@ -1918,6 +1922,7 @@ unsafe fn run_write_poll(
     source: *mut ffi::BurnSource,
     index: usize,
     total_sectors: i32,
+    adr: &str,
     s: &BurnSettings,
     cmds: &Receiver<Command>,
     pending: &mut VecDeque<Command>,
@@ -2031,23 +2036,33 @@ unsafe fn run_write_poll(
         (st.raw.disc_free)(disc);
     }
 
-    // Eject: bij overschrijfbare media (DVD+RW, BD-RE, …) kan de drive nog
-    // even bezig zijn met achtergrondformattering; korte settle-tijd vóór het
-    // eject-verzoek zodat de drive die niet hoeft te negeren.
-    let mut profile_no: c_int = 0;
-    let mut pname = [0 as c_char; 80];
-    let _ = unsafe { (st.raw.disc_get_profile)(drive, &mut profile_no, pname.as_mut_ptr()) };
+    // Eject-reeks (stap 8): een eject van een AANGEKOPPELDE schijf wordt
+    // door de kernel geweigerd (EBUSY) — en de net-geschreven schijf wordt
+    // door udisks2 vaak meteen aangekoppeld. Daarom: eerst de drive loslaten
+    // (zonder eject), eventuele aankoppeling ontmantelen en daarna opnieuw
+    // grabben voor het eject-verzoek.
     if s.eject_after {
-        if profile_is_overwritable(profile_no) {
+        unsafe { (st.raw.drive_release)(drive, 0) };
+        thread::sleep(Duration::from_millis(300));
+        if is_dev_mounted(adr) {
             notify.log(
                 Level::Info,
-                "Korte pauze voor de eject — de drive kan nog bezig zijn met \
-                 achtergrondformattering…",
+                format!("Schijf `{adr}` is aangekoppeld — eerst unmounten voor de eject…"),
             );
-            thread::sleep(Duration::from_secs(2));
+            try_unmount(adr, notify);
+            thread::sleep(Duration::from_millis(300));
         }
-        unsafe { (st.raw.drive_release)(drive, 1) };
-        notify.log(Level::Info, "Drive vrijgegeven met eject-verzoek");
+        let grabbed = unsafe { (st.raw.drive_grab)(drive, 0) } == 1;
+        if grabbed {
+            unsafe { (st.raw.drive_release)(drive, 1) };
+            notify.log(Level::Info, "Eject-verzoek verzonden");
+        } else {
+            notify.log(
+                Level::Warning,
+                "Kon het station niet opnieuw grabben voor de eject — \
+                 eject handmatig nodig",
+            );
+        }
     } else {
         unsafe { (st.raw.drive_release)(drive, 0) };
         notify.log(Level::Info, "Drive vrijgegeven");
@@ -2255,6 +2270,54 @@ pub fn profile_is_rewritable(pno: i32) -> bool {
 /// DVD-RW schrijven gewoon over de oude data heen).
 pub fn profile_is_overwritable(pno: i32) -> bool {
     matches!(pno, 0x12 | 0x13 | 0x1A | 0x43)
+}
+
+/// Zoekt het apparaat in /proc/mounts (true = er is een bestandssysteem op
+/// aangekoppeld; een eject van een aangekoppeld device wordt door de kernel
+/// geweigerd met EBUSY).
+fn is_dev_mounted(dev: &str) -> bool {
+    if dev.is_empty() {
+        return false;
+    }
+    std::fs::read_to_string("/proc/mounts")
+        .map(|content| {
+            content.lines().any(|l| {
+                l.split_whitespace()
+                    .next()
+                    .map(|d| d == dev)
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// Probeert de schijf te unmounten via udisksctl (aanwezig op elk
+/// desktopsysteem met automount).
+fn try_unmount(dev: &str, notify: &Notifier) {
+    match std::process::Command::new("udisksctl")
+        .args(["unmount", "-b", dev])
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            notify.log(
+                Level::Info,
+                format!("Aankoppeling van `{dev}` is opgeheven"),
+            );
+        }
+        Ok(out) => {
+            let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            notify.log(
+                Level::Warning,
+                format!("Unmount van `{dev}` mislukt: {err}"),
+            );
+        }
+        Err(e) => {
+            notify.log(
+                Level::Warning,
+                format!("`udisksctl` niet beschikbaar voor unmount: {e}"),
+            );
+        }
+    }
 }
 
 /// Draait een wis- of format-job en pollt tot de drive weer IDLE is.
