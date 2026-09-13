@@ -25,21 +25,6 @@ impl WriteMode {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub enum BlankMode {
-    Fast,
-    Full,
-}
-
-impl BlankMode {
-    pub fn label(self) -> &'static str {
-        match self {
-            BlankMode::Fast => "Snel (blank fast)",
-            BlankMode::Full => "Volledig (blank full)",
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum MultiSession {
     Auto,
     KeepOpen,
@@ -56,23 +41,20 @@ impl MultiSession {
     }
 }
 
+/// Brand-instellingen. `#[serde(default)]` zorgt dat opslagbestanden uit
+/// oudere versies (met inmiddels verwijderde velden) zonder fouten laden.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct BurnSettings {
-    /// `true` = maximale snelheid, anders `speed_kbps` gebruiken.
-    pub speed_max: bool,
-    /// Eigen snelheid in kB/s (libburn-eenheid: 1000 bytes/s).
-    pub speed_kbps: i32,
+    /// Schrijfmodus: Auto (libburn kiest), TAO of SAO.
     pub write_mode: WriteMode,
-    /// Simulatie-brand (laser uit).
+    /// Simulatie-brand (laser uit) — alleen op schrijf-eenmalige media.
     pub simulate: bool,
     pub multi_session: MultiSession,
     /// Padding in KiB vóór de payload.
     pub padding_kib: i32,
     pub overburn: bool,
     pub underrun_proof: bool,
-    /// Media eerst wissen (herbeschrijfbare media).
-    pub blank_first: bool,
-    pub blank_mode: BlankMode,
     /// Schijf uitwerpen na afloop.
     pub eject_after: bool,
     /// Bij bestands-branden: originele bestandsdatums behouden i.p.v. de
@@ -86,16 +68,12 @@ pub struct BurnSettings {
 impl Default for BurnSettings {
     fn default() -> Self {
         Self {
-            speed_max: true,
-            speed_kbps: 4234, // ≈ 24× CD
             write_mode: WriteMode::Auto,
             simulate: false,
             multi_session: MultiSession::Auto,
             padding_kib: 0,
             overburn: false,
             underrun_proof: true,
-            blank_first: false,
-            blank_mode: BlankMode::Fast,
             eject_after: true,
             keep_timestamps: true,
             disable_dm_on_format: false,

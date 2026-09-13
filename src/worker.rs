@@ -1134,19 +1134,16 @@ fn burn_job(
     notify.log(
         Level::Info,
         format!(
-            "Instellingen: simulatie={}, multi-session={}, padding={} KiB, \
-             wissen vooraf={}, overburn={}",
+            "Instellingen: simulatie={}, multi-session={}, padding={} KiB, overburn={}",
             if s.simulate { "aan" } else { "uit" },
             s.multi_session.label(),
             s.padding_kib,
-            if s.blank_first { "aan" } else { "uit" },
             if s.overburn { "aan" } else { "uit" }
         ),
     );
 
-    // Grab + media-check + evt. wissen (gedeelde flow met bestands-branden).
-    // Grab + media-check + evt. wissen (gedeelde flow).
-    if grab_and_check_media(st, &di, index, s, cmds, pending, notify).is_err() {
+    // Grab + media-check (gedeelde flow).
+    if grab_and_check_media(st, &di, index, notify).is_err() {
         return;
     }
 
@@ -1162,21 +1159,6 @@ fn burn_job(
             ),
         );
     }
-
-    // Snelheid instellen (k/s; 0 = max).
-    let write_speed = if s.speed_max { 0 } else { s.speed_kbps };
-    unsafe { (st.raw.drive_set_speed)(di.drive, 0, write_speed) };
-    notify.log(
-        Level::Info,
-        format!(
-            "Snelheid: {}",
-            if s.speed_max {
-                "maximaal".to_string()
-            } else {
-                format!("{} kB/s", s.speed_kbps)
-            }
-        ),
-    );
 
     // Disc-model: disc → session → track met file-bron + FIFO.
     let path_c = match std::ffi::CString::new(path) {
@@ -1290,11 +1272,10 @@ fn burn_files_job(
         Level::Info,
         format!(
             "Instellingen: simulatie={}, multi-session={}, padding={} KiB, \
-             wissen vooraf={}, overburn={}, tijdstempels={}",
+             overburn={}, tijdstempels={}",
             if s.simulate { "aan" } else { "uit" },
             s.multi_session.label(),
             s.padding_kib,
-            if s.blank_first { "aan" } else { "uit" },
             if s.overburn { "aan" } else { "uit" },
             if s.keep_timestamps {
                 "behouden"
@@ -1304,25 +1285,10 @@ fn burn_files_job(
         ),
     );
 
-    // Grab + media-check + evt. wissen (gedeelde flow).
-    if grab_and_check_media(st, &di, index, s, cmds, pending, notify).is_err() {
+    // Grab + media-check (gedeelde flow).
+    if grab_and_check_media(st, &di, index, notify).is_err() {
         return;
     }
-
-    // Snelheid instellen (k/s; 0 = max).
-    let write_speed = if s.speed_max { 0 } else { s.speed_kbps };
-    unsafe { (st.raw.drive_set_speed)(di.drive, 0, write_speed) };
-    notify.log(
-        Level::Info,
-        format!(
-            "Snelheid: {}",
-            if s.speed_max {
-                "maximaal".to_string()
-            } else {
-                format!("{} kB/s", s.speed_kbps)
-            }
-        ),
-    );
 
     // ISO-image opbouwen in libisofs.
     let vol = if volume_id.trim().is_empty() {
@@ -1646,19 +1612,14 @@ unsafe fn burn_source_get_size(src: *mut ffi::BurnSource) -> i64 {
     }
 }
 
-/// Grab + media-check + evt. wissen vooraf — gedeeld door ISO-branden en
-/// bestands-branden. Bij fout: log + BurnFailed + drive vrijgeven, Err(()).
+/// Grab de drive en controleer de media-status. Bij fout: log + BurnFailed +
+/// drive vrijgeven, Err(()).
 fn grab_and_check_media(
     st: &WorkerState,
     di: &DriveInfo,
     index: usize,
-    s: &BurnSettings,
-    cmds: &Receiver<Command>,
-    pending: &mut VecDeque<Command>,
     notify: &Notifier,
 ) -> Result<DiscStatus, ()> {
-    use crate::settings::BlankMode;
-
     let grabbed = unsafe { (st.raw.drive_grab)(di.drive, 0) } == 1;
     if !grabbed {
         let adr = unsafe { adr_of(di, &st.raw) };
@@ -1685,79 +1646,6 @@ fn grab_and_check_media(
             break;
         }
         thread::sleep(Duration::from_millis(50));
-    }
-
-    // Optioneel eerst wissen (herbeschrijfbare media). Twee slimme overslagen:
-    // direct-overschrijfbare profielen (DVD+RW, DVD-RAM, BD-RE, geformatteerde
-    // DVD-RW) hoeven niet gewist te worden — de drive weigert dat vaak zelfs —
-    // en al-lege media hoeft niet gewist te worden. De erasable-bit melden
-    // veel drives alleen voor CD; daarom ook het SCSI-profiel checken.
-    if s.blank_first {
-        let mut profile_no: c_int = 0;
-        let mut pname = [0 as c_char; 80];
-        let _ = unsafe { (st.raw.disc_get_profile)(di.drive, &mut profile_no, pname.as_mut_ptr()) };
-        if profile_is_overwritable(profile_no) {
-            notify.log(
-                Level::Info,
-                format!(
-                    "Media (profiel 0x{:02X}) is direct overschrijfbaar — wissen \
-                     is niet nodig en wordt overgeslagen",
-                    profile_no
-                ),
-            );
-        } else if status == DiscStatus::Blank {
-            notify.log(Level::Info, "Media is al leeg — wissen overgeslagen");
-        } else {
-            let erasable = unsafe { (st.raw.disc_erasable)(di.drive) } != 0
-                || profile_is_rewritable(profile_no);
-            if !erasable {
-                let msg = "“Media eerst wissen” staat aan, maar de media is niet \
-                           herbeschrijfbaar"
-                    .to_string();
-                notify.log(Level::Error, &msg);
-                unsafe { (st.raw.drive_release)(di.drive, 0) };
-                notify.send(Event::BurnFailed { index, error: msg });
-                return Err(());
-            }
-            let fast = s.blank_mode == BlankMode::Fast;
-            notify.log(
-                Level::Info,
-                format!(
-                    "Station {index}: media eerst wissen ({})…",
-                    if fast { "snel" } else { "volledig" }
-                ),
-            );
-            unsafe { (st.raw.disc_erase)(di.drive, fast as c_int) };
-            let well = match wait_media_job(
-                st,
-                di.drive,
-                "Wissen",
-                DriveStatus::Erasing,
-                None,
-                cmds,
-                pending,
-                notify,
-            ) {
-                Ok(w) => w,
-                Err(()) => {
-                    unsafe { (st.raw.drive_release)(di.drive, 0) };
-                    notify.log(Level::Warning, "Brandjob geannuleerd tijdens wissen");
-                    notify.send(Event::BurnCancelled);
-                    return Err(());
-                }
-            };
-            unsafe { (st.raw.drive_re_assess)(di.drive, 0) };
-            if !well {
-                let msg = "Wissen mislukt — brandjob afgebroken".to_string();
-                notify.log(Level::Error, &msg);
-                unsafe { (st.raw.drive_release)(di.drive, 0) };
-                notify.send(Event::BurnFailed { index, error: msg });
-                return Err(());
-            }
-            notify.log(Level::Success, "Media gewist");
-            let status = DiscStatus::from_raw(unsafe { (st.raw.disc_get_status)(di.drive) });
-            return Ok(status);
-        }
     }
 
     if status != DiscStatus::Blank && status != DiscStatus::Appendable {
