@@ -1313,26 +1313,6 @@ fn burn_files_job(
         ),
     );
 
-    // Grab + media-check (gedeelde flow).
-    if grab_and_check_media(st, &di, index, notify).is_err() {
-        return;
-    }
-
-    // Snelheid: maximaal (0) of een door de user gekozen maximum (kB/s).
-    let write_speed = if s.speed_max { 0 } else { s.speed_kbps };
-    unsafe { (st.raw.drive_set_speed)(di.drive, 0, write_speed) };
-    notify.log(
-        Level::Info,
-        format!(
-            "Snelheid: {}",
-            if s.speed_max {
-                "maximaal".to_string()
-            } else {
-                format!("maximaal {} kB/s", s.speed_kbps)
-            }
-        ),
-    );
-
     // ISO-image opbouwen in libisofs. Bij multi-session op schrijf-eenmalige
     // media wordt de bestaande sessie EERST geïmporteerd (vóór de grab, zodat
     // libisofs het device zelf kan openen); de nieuwe bestanden komen dan in
@@ -1515,11 +1495,28 @@ fn burn_files_job(
     }
 
     // Grab + media-check (gedeelde flow) — ná het importeren, want libisofs
-    // mocht het device zelf openen.
+    // mocht het device zelf openen. De libisofs-data bron houdt het device
+    // wel open (oude bestandsdata wordt tijdens het branden gelezen); een
+    // niet-exclusieve grab laat dat toe.
     if grab_and_check_media(st, &di, index, notify).is_err() {
         unsafe { (iso.image_unref)(image) };
         return;
     }
+
+    // Snelheid: maximaal (0) of een door de user gekozen maximum (kB/s).
+    let write_speed = if s.speed_max { 0 } else { s.speed_kbps };
+    unsafe { (st.raw.drive_set_speed)(di.drive, 0, write_speed) };
+    notify.log(
+        Level::Info,
+        format!(
+            "Snelheid: {}",
+            if s.speed_max {
+                "maximaal".to_string()
+            } else {
+                format!("maximaal {} kB/s", s.speed_kbps)
+            }
+        ),
+    );
 
     // NWA: waar de nieuwe sessie begint (multi-session import).
     let (mut lba, mut nwa): (c_int, c_int) = (0, 0);
