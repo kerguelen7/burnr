@@ -290,6 +290,10 @@ pub enum Event {
         #[allow(dead_code)]
         index: usize,
     },
+    /// De schijf is uit de drive genomen (eject) — mediagegevens zijn verouderd.
+    MediaEjected {
+        index: usize,
+    },
     WorkerStopped,
 }
 
@@ -1951,6 +1955,9 @@ unsafe fn run_write_poll(
                  eject handmatig nodig",
             );
         }
+        // De schijf is (op weg) uit de drive: de mediagegevens in de GUI
+        // zijn verouderd en worden gewist.
+        notify.send(Event::MediaEjected { index });
     } else {
         unsafe { (st.raw.drive_release)(drive, 0) };
         notify.log(Level::Info, "Drive vrijgegeven");

@@ -311,7 +311,7 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
             let capacity_val = media
                 .read_capacity_blocks
                 .map(|b| format!("{} ({} blokken)", format_blocks(b), b))
-                .unwrap_or_else(|| "—".to_string());
+                .unwrap_or_else(|| "— (lege schijf)".to_string());
             let dm_val = if matches!(media.profile_no, 0x41 | 0x42 | 0x43) {
                 match media.bd_spare {
                     Some((alloc, free)) => {
@@ -340,7 +340,11 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
                     ui.end_row();
 
                     ui.weak("Capaciteit (leesbaar):");
-                    ui.label(capacity_val);
+                    ui.label(capacity_val).on_hover_text(
+                        "Hoeveel data er leesbaar op de schijf staat. Op een lege \
+                         schrijf-eenmalige schijf is er niets te lezen ('-'); op \
+                         RW/RE-media meldt de drive de geformatteerde capaciteit.",
+                    );
                     ui.weak("Defect mgmt:");
                     ui.label(dm_val);
                     ui.end_row();
@@ -351,7 +355,7 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
 
             if !media.speeds.is_empty() {
                 egui::CollapsingHeader::new(
-                    egui::RichText::new(format!("Snelheden ({} entréés)", media.speeds.len()))
+                    egui::RichText::new(format!("Snelheden ({} entrees)", media.speeds.len()))
                         .small(),
                 )
                 .default_open(false)

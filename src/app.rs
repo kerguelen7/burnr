@@ -690,8 +690,15 @@ impl App {
                     }
                 }
             }
-            Event::MaintDone { .. } => {
+            Event::MaintDone { index, .. } => {
                 self.active_maint = None;
+                // Na wissen/formatteren is de getoonde mediastatus verouderd;
+                // automatisch opnieuw inspecteren voor verse gegevens.
+                self.log.push(
+                    Level::Info,
+                    "Automatische herinspectie na onderhoud…".to_string(),
+                );
+                self.request_inspect(index);
             }
             Event::MaintFailed { index, error, .. } => {
                 self.active_maint = None;
@@ -701,6 +708,14 @@ impl App {
             }
             Event::MaintCancelled { .. } => {
                 self.active_maint = None;
+            }
+            Event::MediaEjected { index } => {
+                if let Some(d) = self.drives.get_mut(index) {
+                    d.media = None;
+                    d.inspect_error = None;
+                }
+                self.log
+                    .push(Level::Info, "Mediagegevens gewist na eject".to_string());
             }
             Event::WorkerStopped => {}
         }
