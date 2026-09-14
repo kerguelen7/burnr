@@ -519,6 +519,59 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
         && app.active_read.is_none()
         && media_ok;
 
+    // Snelheid (stap 9): Maximaal (default) of een lagere maximum gekozen uit
+    // de snelheden die de drive zelf meldt voor de ingelegde media — geen
+    // vrije waarden, want libburn brandt nooit sneller dan media/drive
+    // toelaten. Vooral nuttig voor mindere kwaliteit media.
+    let speed_options: Vec<(i32, String)> = d
+        .media
+        .as_ref()
+        .map(|m| {
+            let mut opts: Vec<(i32, String)> = m
+                .speeds
+                .iter()
+                .filter(|sp| sp.write_speed > 0)
+                .map(|sp| {
+                    (
+                        sp.write_speed,
+                        crate::worker::speed_multiplier_label(sp.profile_loaded, sp.write_speed),
+                    )
+                })
+                .collect();
+            opts.sort_by(|a, b| b.0.cmp(&a.0));
+            opts.dedup_by(|a, b| a.0 == b.0);
+            opts
+        })
+        .unwrap_or_default();
+    ui.horizontal(|ui| {
+        ui.label("Snelheid:");
+        let current = if app.settings.speed_max {
+            "Maximaal".to_string()
+        } else {
+            format!("max. {} kB/s", app.settings.speed_kbps)
+        };
+        egui::ComboBox::from_id_salt("burn_speed")
+            .selected_text(current)
+            .show_ui(ui, |ui| {
+                ui.selectable_label(app.settings.speed_max, "Maximaal")
+                    .clicked()
+                    .then(|| app.settings.speed_max = true);
+                for (kb, mult) in &speed_options {
+                    let label = format!("max. {kb} kB/s — {mult}");
+                    if ui
+                        .selectable_label(
+                            !app.settings.speed_max && app.settings.speed_kbps == *kb,
+                            label,
+                        )
+                        .clicked()
+                    {
+                        app.settings.speed_max = false;
+                        app.settings.speed_kbps = *kb;
+                    }
+                }
+            });
+    });
+
     // Bronkeuze: ISO-bestand of eigen bestandsselectie (libisofs).
     ui.horizontal(|ui| {
         ui.label("Bron:");
@@ -757,70 +810,81 @@ fn toc_section(ui: &mut egui::Ui, media: &crate::worker::MediaInfo) {
         return;
     }
 
-    ui.label(egui::RichText::new("Inhoud (TOC)").strong());
-    egui::Grid::new("toc_grid")
-        .striped(true)
-        .num_columns(6)
-        .spacing([16.0, 3.0])
+    // Inklapbaar: bij multi-session discs groeit de tabel met elke sessie;
+    // de kop toont het aantal sessies/tracks zodat het eiland compact blijft.
+    let total_tracks: usize = media.sessions.iter().map(|s| s.tracks.len()).sum();
+    let header = format!(
+        "Inhoud (TOC) — {} sessie(s), {} track(s)",
+        media.sessions.len(),
+        total_tracks
+    );
+    egui::CollapsingHeader::new(egui::RichText::new(header).small())
+        .default_open(media.sessions.len() <= 3)
         .show(ui, |ui| {
-            ui.strong("Sessie");
-            ui.strong("Track");
-            ui.strong("Type");
-            ui.strong("Start-LBA");
-            ui.strong("Blokken");
-            ui.strong("≈ Grootte");
-            ui.end_row();
-
-            for s in &media.sessions {
-                for t in &s.tracks {
-                    ui.label(t.session.to_string());
-                    ui.label(t.track_no.to_string());
-                    ui.label(if t.is_data {
-                        if t.copy_permitted {
-                            "data · kopie ok"
-                        } else {
-                            "data"
-                        }
-                    } else if t.copy_permitted {
-                        "audio · kopie ok"
-                    } else {
-                        "audio"
-                    });
-                    ui.monospace(t.start_lba.to_string());
-                    ui.label(if t.blocks > 0 {
-                        t.blocks.to_string()
-                    } else {
-                        "—".to_string()
-                    });
-                    ui.label(if t.blocks > 0 {
-                        format_blocks(t.blocks)
-                    } else {
-                        "—".to_string()
-                    });
+            egui::Grid::new("toc_grid")
+                .striped(true)
+                .num_columns(6)
+                .spacing([16.0, 3.0])
+                .show(ui, |ui| {
+                    ui.strong("Sessie");
+                    ui.strong("Track");
+                    ui.strong("Type");
+                    ui.strong("Start-LBA");
+                    ui.strong("Blokken");
+                    ui.strong("≈ Grootte");
                     ui.end_row();
-                }
+
+                    for s in &media.sessions {
+                        for t in &s.tracks {
+                            ui.label(t.session.to_string());
+                            ui.label(t.track_no.to_string());
+                            ui.label(if t.is_data {
+                                if t.copy_permitted {
+                                    "data · kopie ok"
+                                } else {
+                                    "data"
+                                }
+                            } else if t.copy_permitted {
+                                "audio · kopie ok"
+                            } else {
+                                "audio"
+                            });
+                            ui.monospace(t.start_lba.to_string());
+                            ui.label(if t.blocks > 0 {
+                                t.blocks.to_string()
+                            } else {
+                                "—".to_string()
+                            });
+                            ui.label(if t.blocks > 0 {
+                                format_blocks(t.blocks)
+                            } else {
+                                "—".to_string()
+                            });
+                            ui.end_row();
+                        }
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "sessie {} — LBA {} … {}",
+                                s.index + 1,
+                                s.start_lba,
+                                s.end_lba.saturating_sub(1)
+                            ))
+                            .small()
+                            .color(colors::DIM),
+                        );
+                        ui.end_row();
+                    }
+                });
+
+            if media.incomplete_sessions > 0 {
                 ui.label(
                     egui::RichText::new(format!(
-                        "sessie {} — LBA {} … {}",
-                        s.index + 1,
-                        s.start_lba,
-                        s.end_lba.saturating_sub(1)
+                        "⚠ {} onvolledige sessie(s) aanwezig",
+                        media.incomplete_sessions
                     ))
                     .small()
-                    .color(colors::DIM),
+                    .color(colors::WARN),
                 );
-                ui.end_row();
             }
         });
-
-    if media.incomplete_sessions > 0 {
-        ui.label(
-            egui::RichText::new(format!(
-                "⚠ {} onvolledige sessie(s) aanwezig",
-                media.incomplete_sessions
-            ))
-            .small()
-            .color(colors::WARN),
-        );
-    }
 }

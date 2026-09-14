@@ -46,6 +46,11 @@ impl MultiSession {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BurnSettings {
+    /// `true` = maximale snelheid, anders `speed_kbps` als maximum gebruiken.
+    pub speed_max: bool,
+    /// Maximum-snelheid in kB/s (libburn-eenheid: 1000 bytes/s). Geen vrije
+    /// keuze: alleen waarden uit de snelhedenlijst van de drive/media.
+    pub speed_kbps: i32,
     /// Schrijfmodus: Auto (libburn kiest), TAO of SAO.
     pub write_mode: WriteMode,
     /// Simulatie-brand (laser uit) — alleen op schrijf-eenmalige media.
@@ -68,6 +73,8 @@ pub struct BurnSettings {
 impl Default for BurnSettings {
     fn default() -> Self {
         Self {
+            speed_max: true,
+            speed_kbps: 0,
             write_mode: WriteMode::Auto,
             simulate: false,
             multi_session: MultiSession::Auto,

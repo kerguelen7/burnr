@@ -1169,6 +1169,23 @@ fn burn_job(
         );
     }
 
+    // Snelheid: maximaal (0) of een door de user gekozen maximum (kB/s).
+    // libburn brandt nooit sneller dan dit maximum en ook nooit sneller dan
+    // media/drive toelaten.
+    let write_speed = if s.speed_max { 0 } else { s.speed_kbps };
+    unsafe { (st.raw.drive_set_speed)(di.drive, 0, write_speed) };
+    notify.log(
+        Level::Info,
+        format!(
+            "Snelheid: {}",
+            if s.speed_max {
+                "maximaal".to_string()
+            } else {
+                format!("maximaal {} kB/s", s.speed_kbps)
+            }
+        ),
+    );
+
     // Disc-model: disc → session → track met file-bron + FIFO.
     let path_c = match std::ffi::CString::new(path) {
         Ok(c) => c,
@@ -1292,6 +1309,26 @@ fn burn_files_job(
                 "behouden"
             } else {
                 "opnametijd"
+            }
+        ),
+    );
+
+    // Grab + media-check (gedeelde flow).
+    if grab_and_check_media(st, &di, index, notify).is_err() {
+        return;
+    }
+
+    // Snelheid: maximaal (0) of een door de user gekozen maximum (kB/s).
+    let write_speed = if s.speed_max { 0 } else { s.speed_kbps };
+    unsafe { (st.raw.drive_set_speed)(di.drive, 0, write_speed) };
+    notify.log(
+        Level::Info,
+        format!(
+            "Snelheid: {}",
+            if s.speed_max {
+                "maximaal".to_string()
+            } else {
+                format!("maximaal {} kB/s", s.speed_kbps)
             }
         ),
     );

@@ -329,6 +329,7 @@ pub struct RawLibburn {
     pub drive_cancel: unsafe extern "C" fn(*mut BurnDrive),
     pub drive_wrote_well: unsafe extern "C" fn(*mut BurnDrive) -> c_int,
     pub drive_re_assess: unsafe extern "C" fn(*mut BurnDrive, c_int) -> c_int,
+    pub drive_set_speed: unsafe extern "C" fn(*mut BurnDrive, c_int, c_int),
     pub disc_track_lba_nwa: unsafe extern "C" fn(
         *mut BurnDrive,
         *mut BurnWriteOpts,
@@ -659,6 +660,11 @@ impl RawLibburn {
                 "burn_drive_re_assess",
                 unsafe extern "C" fn(*mut BurnDrive, c_int) -> c_int
             );
+            let drive_set_speed = resolve!(
+                lib,
+                "burn_drive_set_speed",
+                unsafe extern "C" fn(*mut BurnDrive, c_int, c_int)
+            );
             let disc_track_lba_nwa = resolve!(
                 lib,
                 "burn_disc_track_lba_nwa",
@@ -771,6 +777,7 @@ impl RawLibburn {
                 drive_cancel,
                 drive_wrote_well,
                 drive_re_assess,
+                drive_set_speed,
                 disc_track_lba_nwa,
                 disc_get_bd_spare_info,
                 disc_get_media_id,
