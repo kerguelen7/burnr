@@ -21,10 +21,51 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                     if ui.small_button("Wissen").clicked() {
                         app.log.clear();
                     }
+                    if ui
+                        .small_button("💾 Opslaan…")
+                        .on_hover_text("Sla de zichtbare logregels op in een bestand")
+                        .clicked()
+                    {
+                        if let Some(p) = rfd::FileDialog::new()
+                            .set_file_name("libburn_gui-log.txt")
+                            .save_file()
+                        {
+                            match std::fs::File::create(&p) {
+                                Ok(mut f) => {
+                                    use std::io::Write;
+                                    for e in app.log.entries() {
+                                        let _ = writeln!(
+                                            f,
+                                            "{} [{:>4}] {}",
+                                            e.time,
+                                            e.level.tag().trim(),
+                                            e.msg
+                                        );
+                                    }
+                                    let _ = f.flush();
+                                    app.log.push(
+                                        Level::Success,
+                                        format!("Log opgeslagen: {}", p.display()),
+                                    );
+                                }
+                                Err(e) => {
+                                    app.log
+                                        .push(Level::Error, format!("Log opslaan mislukt: {e}"));
+                                }
+                            }
+                        }
+                    }
                     ui.checkbox(&mut app.auto_scroll, "auto-scroll");
                 });
             });
             ui.separator();
+            if let Some(p) = &app.log_file {
+                ui.label(
+                    egui::RichText::new(format!("Sessielog: {}", p.display()))
+                        .small()
+                        .color(colors::DIM),
+                );
+            }
 
             egui::ScrollArea::vertical()
                 .stick_to_bottom(app.auto_scroll)

@@ -126,6 +126,7 @@ pub struct MaintJob {
 
 pub struct App {
     pub log: LogStore,
+    pub log_file: Option<std::path::PathBuf>,
     pub lib_state: LibState,
     pub scan_state: ScanState,
     pub drives: Vec<DriveEntry>,
@@ -136,10 +137,10 @@ pub struct App {
     pub active_read: Option<ActiveRead>,
     /// Pad voor de volgende schijfkopie.
     pub read_path: String,
-    /// Lopend brandjob (één tegelijk).
-    pub active_burn: Option<ActiveBurn>,
-    /// Lopende onderhoudsjob (wissen/formatteren).
-    pub active_maint: Option<MaintJob>,
+    /// Lopende brandjobs — meerdere stations tegelijk (stap 9b).
+    pub active_burns: Vec<ActiveBurn>,
+    /// Lopende onderhoudsjobs (wissen/formatteren) per station.
+    pub active_maints: Vec<MaintJob>,
     /// Pad naar het ISO-bestand om te branden.
     pub burn_path: String,
     /// Bronkeuze voor het branden.
@@ -180,12 +181,22 @@ impl App {
             style.visuals.panel_fill = Color32::from_rgb(24, 26, 31);
         });
 
+        // Stap 9a: sessielogbestand in de data-map van de gebruiker.
+        let (log_store, log_path) = match session_log_file() {
+            Some(path) => match LogStore::with_session_file(path.clone()) {
+                Ok(store) => (store, Some(path)),
+                Err(_) => (LogStore::new(), None),
+            },
+            None => (LogStore::new(), None),
+        };
+
         let (cmd_tx, cmd_rx) = channel::<Command>();
         let (event_tx, event_rx) = channel::<Event>();
         let handle = worker::spawn(cmd_rx, event_tx, cc.egui_ctx.clone());
 
         let mut app = Self {
-            log: LogStore::default(),
+            log: log_store,
+            log_file: log_path,
             lib_state: LibState::Loading,
             scan_state: ScanState::Idle,
             drives: Vec::new(),
@@ -193,8 +204,8 @@ impl App {
             busy_drive: None,
             active_read: None,
             read_path: String::new(),
-            active_burn: None,
-            active_maint: None,
+            active_burns: Vec::new(),
+            active_maints: Vec::new(),
             burn_path: String::new(),
             burn_source_kind: BurnSourceKind::IsoFile,
             burn_files: Vec::new(),
@@ -270,7 +281,10 @@ impl App {
     }
 
     pub fn request_inspect(&mut self, index: usize) {
-        if self.busy_drive.is_some() || self.active_read.is_some() || self.active_burn.is_some() {
+        if self.busy_drive.is_some()
+            || self.active_read.is_some()
+            || self.job_active_on(index)
+        {
             return;
         }
         self.log.push(
@@ -305,7 +319,8 @@ impl App {
     }
 
     pub fn request_read(&mut self, index: usize, path: String) {
-        if self.active_read.is_some() || self.busy_drive.is_some() || self.active_burn.is_some() {
+        // Lezen blijft sequentieel: één kopie tegelijk (blokkeert de worker).
+        if self.active_read.is_some() || self.busy_drive.is_some() || self.job_active_on(index) {
             return;
         }
         let expanded = expand_home(&path);
@@ -336,7 +351,7 @@ impl App {
     }
 
     pub fn request_burn(&mut self, index: usize, path: String) {
-        if self.active_burn.is_some() || self.active_read.is_some() || self.busy_drive.is_some() {
+        if self.active_read.is_some() || self.busy_drive.is_some() || self.job_active_on(index) {
             return;
         }
         let expanded = expand_home(&path);
@@ -366,30 +381,26 @@ impl App {
         });
     }
 
-    pub fn cancel_burn(&mut self) {
-        if self.active_burn.is_some() {
+    pub fn cancel_burn(&mut self, index: usize) {
+        if self.active_burns.iter().any(|b| b.index == index) {
             self.log
                 .push(Level::Info, "Brandjob annuleren aangevraagd".to_string());
-            self.send(Command::CancelBurn);
+            self.send(Command::CancelBurn { index });
         }
     }
 
-    pub fn cancel_maint(&mut self) {
-        if self.active_maint.is_some() {
+    pub fn cancel_maint(&mut self, index: usize) {
+        if self.active_maints.iter().any(|m| m.index == index) {
             self.log.push(
                 Level::Info,
                 "Onderhoudsjob annuleren aangevraagd".to_string(),
             );
-            self.send(Command::CancelBurn);
+            self.send(Command::CancelBurn { index });
         }
     }
 
     pub fn request_erase(&mut self, index: usize, fast: bool) {
-        if self.active_maint.is_some()
-            || self.active_burn.is_some()
-            || self.active_read.is_some()
-            || self.busy_drive.is_some()
-        {
+        if self.active_read.is_some() || self.busy_drive.is_some() || self.job_active_on(index) {
             return;
         }
         self.log.push(
@@ -403,11 +414,7 @@ impl App {
     }
 
     pub fn request_format(&mut self, index: usize) {
-        if self.active_maint.is_some()
-            || self.active_burn.is_some()
-            || self.active_read.is_some()
-            || self.busy_drive.is_some()
-        {
+        if self.active_read.is_some() || self.busy_drive.is_some() || self.job_active_on(index) {
             return;
         }
         self.log
@@ -416,6 +423,13 @@ impl App {
             index,
             settings: self.settings.clone(),
         });
+    }
+
+    /// Draait er op dit station al een job (brand/wis/format/inspect)?
+    pub fn job_active_on(&self, index: usize) -> bool {
+        self.active_burns.iter().any(|b| b.index == index)
+            || self.active_maints.iter().any(|m| m.index == index)
+            || self.busy_drive == Some(index)
     }
 
     /// Voeg een bestand/map toe aan de data-selectie (geen duplicaten).
@@ -482,7 +496,7 @@ impl App {
     }
 
     pub fn request_burn_files(&mut self, index: usize) {
-        if self.active_burn.is_some() || self.active_read.is_some() || self.busy_drive.is_some() {
+        if self.active_read.is_some() || self.busy_drive.is_some() || self.job_active_on(index) {
             return;
         }
         if self.burn_files.is_empty() {
@@ -629,7 +643,10 @@ impl App {
                 simulate,
             } => {
                 self.burn_led = JobLed::Busy;
-                self.active_burn = Some(ActiveBurn {
+                // Vervang een evt. oude entry voor dit station (hoort niet
+                // voor te komen, maar robustheid eerste).
+                self.active_burns.retain(|b| b.index != index);
+                self.active_burns.push(ActiveBurn {
                     index,
                     sector: 0,
                     sectors: total_sectors,
@@ -653,22 +670,24 @@ impl App {
                 elapsed_secs,
                 eta_secs,
             } => {
-                if let Some(b) = self.active_burn.as_mut() {
-                    if b.index == index {
-                        b.sector = sector;
-                        b.sectors = sectors;
-                        b.kbps = kbps;
-                        b.buffer_pct = buffer_pct;
-                        b.fifo_pct = fifo_pct;
-                        b.phase = phase;
-                        b.elapsed_secs = elapsed_secs;
-                        b.eta_secs = eta_secs;
-                    }
+                if let Some(b) = self
+                    .active_burns
+                    .iter_mut()
+                    .find(|b| b.index == index)
+                {
+                    b.sector = sector;
+                    b.sectors = sectors;
+                    b.kbps = kbps;
+                    b.buffer_pct = buffer_pct;
+                    b.fifo_pct = fifo_pct;
+                    b.phase = phase;
+                    b.elapsed_secs = elapsed_secs;
+                    b.eta_secs = eta_secs;
                 }
             }
-            Event::BurnDone => {
+            Event::BurnDone { index } => {
                 self.burn_led = JobLed::Ok;
-                self.active_burn = None;
+                self.active_burns.retain(|b| b.index != index);
                 // Bestandenlijst wissen na een geslaagde brand — een nieuwe
                 // run begint met een schone selectie — en het volumelabel door
                 // zetten naar het volgende nummer van vandaag.
@@ -684,31 +703,33 @@ impl App {
             }
             Event::BurnFailed { index, error } => {
                 self.burn_led = JobLed::Error;
-                self.active_burn = None;
+                self.active_burns.retain(|b| b.index != index);
                 if let Some(d) = self.drives.get_mut(index) {
                     d.inspect_error = Some(error);
                 }
             }
-            Event::BurnCancelled => {
-                self.burn_led = JobLed::Idle;
-                self.active_burn = None;
+            Event::BurnCancelled { index } => {
+                self.active_burns.retain(|b| b.index != index);
+                if self.active_burns.is_empty() {
+                    self.burn_led = JobLed::Idle;
+                }
             }
             Event::MaintStarted { kind, index } => {
-                self.active_maint = Some(MaintJob {
-                    kind,
-                    index,
-                    pct: 0.0,
-                });
+                self.active_maints
+                    .retain(|m| !(m.kind == kind && m.index == index));
+                self.active_maints.push(MaintJob { kind, index, pct: 0.0 });
             }
             Event::MaintProgress { kind, index, pct } => {
-                if let Some(m) = self.active_maint.as_mut() {
-                    if m.kind == kind && m.index == index {
-                        m.pct = pct;
-                    }
+                if let Some(m) = self
+                    .active_maints
+                    .iter_mut()
+                    .find(|m| m.kind == kind && m.index == index)
+                {
+                    m.pct = pct;
                 }
             }
             Event::MaintDone { index, .. } => {
-                self.active_maint = None;
+                self.active_maints.retain(|m| m.index != index);
                 // Na wissen/formatteren is de getoonde mediastatus verouderd;
                 // automatisch opnieuw inspecteren voor verse gegevens.
                 self.log.push(
@@ -718,13 +739,13 @@ impl App {
                 self.request_inspect(index);
             }
             Event::MaintFailed { index, error, .. } => {
-                self.active_maint = None;
+                self.active_maints.retain(|m| m.index != index);
                 if let Some(d) = self.drives.get_mut(index) {
                     d.inspect_error = Some(error);
                 }
             }
-            Event::MaintCancelled { .. } => {
-                self.active_maint = None;
+            Event::MaintCancelled { index, .. } => {
+                self.active_maints.retain(|m| m.index != index);
             }
             Event::MediaEjected { index } => {
                 if let Some(d) = self.drives.get_mut(index) {
@@ -752,8 +773,8 @@ impl eframe::App for App {
             || self.scan_state == ScanState::Scanning
             || self.busy_drive.is_some()
             || self.active_read.is_some()
-            || self.active_burn.is_some()
-            || self.active_maint.is_some();
+            || !self.active_burns.is_empty()
+            || !self.active_maints.is_empty();
         if busy {
             ctx.request_repaint_after(Duration::from_millis(80));
         }
@@ -773,6 +794,28 @@ impl eframe::App for App {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, eframe::APP_KEY, &PersistedState::from_app(self));
     }
+}
+
+/// Pad van het sessielogbestand (stap 9a): `$XDG_DATA_HOME` of
+/// `$HOME/.local/share` + `/libburn_gui/logs/sessie-<tijdstempel>.log`.
+fn session_log_file() -> Option<std::path::PathBuf> {
+    let base = std::env::var("XDG_DATA_HOME")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|h| format!("{h}/.local/share"))
+        })?;
+    let ts = chrono::Local::now()
+        .format("sessie-%Y%m%d-%H%M%S.log")
+        .to_string();
+    Some(
+        std::path::PathBuf::from(base)
+            .join("libburn_gui")
+            .join("logs")
+            .join(ts),
+    )
 }
 
 /// Zet een pad dat met `~` begint om naar een absoluut pad via $HOME.

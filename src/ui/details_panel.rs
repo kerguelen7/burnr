@@ -469,7 +469,7 @@ fn read_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
 fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
     use crate::app::BurnSourceKind;
 
-    if let Some(b) = app.active_burn.clone() {
+    if let Some(b) = app.active_burns.iter().find(|b| b.index == d.index).cloned() {
         if b.index == d.index {
             let frac = b.fraction();
             ui.add(egui::ProgressBar::new(frac).show_percentage());
@@ -489,7 +489,7 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
                 ui.label(format!("buffer {:.0}%", b.buffer_pct));
                 ui.label(format!("fifo {:.0}%", b.fifo_pct));
                 if ui.button("⏹ Annuleren").clicked() {
-                    app.cancel_burn();
+                    app.cancel_burn(d.index);
                 }
             });
             ui.horizontal(|ui| {
@@ -713,7 +713,7 @@ fn maint_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry
 
     ui.label(egui::RichText::new("Onderhoud").strong());
 
-    if let Some(m) = app.active_maint.clone() {
+    if let Some(m) = app.active_maints.iter().find(|m| m.index == d.index).cloned() {
         if m.index == d.index {
             ui.horizontal(|ui| {
                 ui.spinner();
@@ -722,7 +722,7 @@ fn maint_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry
                     ui.label(format!("{:.0}%", m.pct));
                 }
                 if ui.button("⏹ Annuleren").clicked() {
-                    app.cancel_maint();
+                    app.cancel_maint(d.index);
                 }
             });
         } else {
@@ -741,7 +741,7 @@ fn maint_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry
     let ready = app.scan_state == ScanState::Done
         && app.busy_drive.is_none()
         && app.active_read.is_none()
-        && app.active_burn.is_none();
+        && !app.job_active_on(d.index);
 
     // Wissen: alleen zinvol op herbeschrijfbare media die niet direct
     // overschrijfbaar is (CD-RW, DVD-RW sequentieel). Voor overschrijfbare

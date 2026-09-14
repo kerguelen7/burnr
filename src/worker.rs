@@ -191,8 +191,8 @@ pub enum Command {
         index: usize,
         settings: BurnSettings,
     },
-    /// Bezig lopende brandjob annuleren.
-    CancelBurn,
+    /// Actieve job op een station annuleren (brand/wis/format).
+    CancelBurn { index: usize },
     Shutdown,
 }
 
@@ -259,12 +259,12 @@ pub enum Event {
         /// Verwachte resterende tijd in seconden (0 = onbekend).
         eta_secs: f64,
     },
-    BurnDone,
+    BurnDone { index: usize },
     BurnFailed {
         index: usize,
         error: String,
     },
-    BurnCancelled,
+    BurnCancelled { index: usize },
     /// Onderhoudsjob (stap 6): wissen of formatteren los van het branden.
     MaintStarted {
         kind: MaintKind,
@@ -350,79 +350,203 @@ struct WorkerState {
     n_drives: usize,
 }
 
+/// Soort actieve job.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum JobKind {
+    Write { simulate: bool },
+    Erase,
+    Format,
+}
+
+/// libburn/libisofs-resources van een write-job die pas na afloop
+/// vrijgegeven worden.
+struct WriteRes {
+    opts: *mut ffi::BurnWriteOpts,
+    disc: *mut ffi::BurnDisc,
+    session: *mut ffi::BurnSession,
+    track: *mut ffi::BurnTrack,
+    source: *mut ffi::BurnSource,
+    /// libisofs data-bron bij multi-session import (blijft alive tot na de
+    /// brand: oude bestandsdata wordt tijdens het schrijven gelezen).
+    data_src: *mut crate::isofs::IsoDataSource,
+    iso_opts: *mut crate::isofs::IsoWriteOpts,
+    image: *mut crate::isofs::IsoImage,
+}
+
+/// Actieve job die niet-blokkerend wordt gepolld (stap 9b: meerdere stations
+/// tegelijk). libburn draait brandjobs in eigen threads; onze poll leest
+/// alleen de status voor voortgang en afronding.
+struct ActiveJob {
+    index: usize,
+    adr: String,
+    drive: *mut ffi::BurnDrive,
+    kind: JobKind,
+    write: Option<WriteJob>,
+    started: std::time::Instant,
+    last_progress: std::time::Instant,
+    last_pct: Option<i32>,
+    cancelled: bool,
+}
+
+struct WriteJob {
+    s: BurnSettings,
+    res: WriteRes,
+}
+
 fn run(cmds: Receiver<Command>, events: Sender<Event>, ctx: egui::Context) {
     let notify = Notifier { tx: &events, ctx };
     let mut state: Option<WorkerState> = None;
     let mut pending: VecDeque<Command> = VecDeque::new();
+    let mut active: Vec<ActiveJob> = Vec::new();
     let mut shutdown = false;
 
-    while !shutdown {
-        let cmd = match pending.pop_front() {
-            Some(c) => c,
-            None => match cmds.recv_timeout(Duration::from_millis(200)) {
-                Ok(c) => c,
-                Err(RecvTimeoutError::Timeout) => continue,
-                Err(RecvTimeoutError::Disconnected) => break,
-            },
+    // Stap 9b: meerdere stations tegelijk. libburn draait brandjobs in eigen
+    // threads; deze lus polt alle actieve jobs voor voortgang en afronding.
+    while !shutdown || !active.is_empty() {
+        // 1) Eén commando ophalen. Met actieve jobs niet-blokkerend.
+        let cmd = if let Some(c) = pending.pop_front() {
+            Some(c)
+        } else if !active.is_empty() {
+            cmds.try_recv().ok()
+        } else if !shutdown {
+            match cmds.recv_timeout(Duration::from_millis(200)) {
+                Ok(c) => Some(c),
+                Err(RecvTimeoutError::Timeout) => None,
+                Err(RecvTimeoutError::Disconnected) => {
+                    shutdown = true;
+                    None
+                }
+            }
+        } else {
+            None
         };
-        match cmd {
-            Command::LoadLibrary { path, exclusive } => {
-                load_library(&mut state, path, exclusive, &notify)
+
+        if let Some(cmd) = cmd {
+            match cmd {
+                Command::LoadLibrary { path, exclusive } => {
+                    if active.is_empty() {
+                        load_library(&mut state, path, exclusive, &notify);
+                    } else {
+                        notify.log(
+                            Level::Warning,
+                            "Herladen is niet mogelijk tijdens actieve jobs",
+                        );
+                    }
+                }
+                Command::Scan => {
+                    if active.is_empty() {
+                        scan(&mut state, &cmds, &mut pending, &notify);
+                    } else {
+                        notify.log(
+                            Level::Warning,
+                            "Scannen is niet mogelijk tijdens actieve jobs",
+                        );
+                    }
+                }
+                Command::InspectDrive(index) => {
+                    if active.iter().any(|j| j.index == index) {
+                        notify.log(
+                            Level::Warning,
+                            format!(
+                                "Station {index} is bezig met een job — inspectie overgeslagen"
+                            ),
+                        );
+                    } else {
+                        inspect(state.as_ref(), index, &notify);
+                    }
+                }
+                Command::ReadDisc { index, path } => {
+                    if !active.is_empty() {
+                        notify.log(
+                            Level::Warning,
+                            "Lezen is niet mogelijk tijdens actieve jobs",
+                        );
+                    } else {
+                        read_disc(&state, index, &path, &cmds, &mut pending, &notify)
+                    }
+                }
+                Command::CancelRead => {
+                    notify.log(
+                        Level::Warning,
+                        "Annuleren gevraagd, maar er is geen kopie bezig",
+                    );
+                }
+                Command::BurnDisc {
+                    index,
+                    path,
+                    settings,
+                } => burn_job(&state, index, &path, &settings, &mut active, &notify),
+                Command::BurnFiles {
+                    index,
+                    paths,
+                    volume_id,
+                    settings,
+                    import_start_block,
+                } => burn_files_job(
+                    &state,
+                    index,
+                    &paths,
+                    &volume_id,
+                    import_start_block,
+                    &settings,
+                    &mut active,
+                    &notify,
+                ),
+                Command::CancelBurn { index } => {
+                    if let Some(st) = state.as_ref() {
+                        if let Some(job) = active.iter_mut().find(|j| j.index == index) {
+                            unsafe { (st.raw.drive_cancel)(job.drive) };
+                            job.cancelled = true;
+                            notify.log(
+                                Level::Info,
+                                format!("Annuleren gevraagd voor station {index}"),
+                            );
+                        } else {
+                            notify.log(
+                                Level::Warning,
+                                format!("Geen actieve job op station {index}"),
+                            );
+                        }
+                    }
+                }
+                Command::EraseDisc { index, fast } => {
+                    erase_job(&state, index, fast, &mut active, &notify)
+                }
+                Command::FormatDisc { index, settings } => {
+                    format_job(&state, index, &settings, &mut active, &notify)
+                }
+                Command::Shutdown => {
+                    shutdown = true;
+                    if let Some(st) = state.as_ref() {
+                        for job in &mut active {
+                            unsafe { (st.raw.drive_cancel)(job.drive) };
+                            job.cancelled = true;
+                        }
+                    }
+                }
             }
-            Command::Scan => scan(&mut state, &cmds, &mut pending, &notify),
-            Command::InspectDrive(index) => inspect(state.as_ref(), index, &notify),
-            Command::ReadDisc { index, path } => {
-                read_disc(&state, index, &path, &cmds, &mut pending, &notify)
+        }
+
+        // 2) Actieve jobs pollen (voortgang + afronding).
+        if !active.is_empty() {
+            let Some(st) = state.as_ref() else {
+                active.clear();
+                continue;
+            };
+            let mut keep: Vec<ActiveJob> = Vec::new();
+            while let Some(mut job) = active.pop() {
+                let done = unsafe { poll_job(st, &mut job, &notify) };
+                if done {
+                    unsafe { finalize_job(st, &mut job, &notify) };
+                } else {
+                    keep.push(job);
+                }
             }
-            Command::CancelRead => {
-                notify.log(
-                    Level::Warning,
-                    "Annuleren gevraagd, maar er is geen kopie bezig",
-                );
+            keep.reverse();
+            active = keep;
+            if !active.is_empty() {
+                thread::sleep(Duration::from_millis(120));
             }
-            Command::BurnDisc {
-                index,
-                path,
-                settings,
-            } => burn_job(
-                &state,
-                index,
-                &path,
-                &settings,
-                &cmds,
-                &mut pending,
-                &notify,
-            ),
-            Command::BurnFiles {
-                index,
-                paths,
-                volume_id,
-                settings,
-                import_start_block,
-            } => burn_files_job(
-                &state,
-                index,
-                &paths,
-                &volume_id,
-                import_start_block,
-                &settings,
-                &cmds,
-                &mut pending,
-                &notify,
-            ),
-            Command::CancelBurn => {
-                notify.log(
-                    Level::Warning,
-                    "Annuleren gevraagd, maar er is geen job bezig",
-                );
-            }
-            Command::EraseDisc { index, fast } => {
-                erase_job(&state, index, fast, &cmds, &mut pending, &notify)
-            }
-            Command::FormatDisc { index, settings } => {
-                format_job(&state, index, &settings, &cmds, &mut pending, &notify)
-            }
-            Command::Shutdown => shutdown = true,
         }
     }
 
@@ -1068,8 +1192,7 @@ fn burn_job(
     index: usize,
     path: &str,
     s: &BurnSettings,
-    cmds: &Receiver<Command>,
-    pending: &mut VecDeque<Command>,
+    active: &mut Vec<ActiveJob>,
     notify: &Notifier,
 ) {
     use crate::settings::WriteMode;
@@ -1208,26 +1331,51 @@ fn burn_job(
             }
         };
 
-    // Branden starten en poll-lus draaien (gedeelde helper).
+    // Branden starten (asynchroon — libburn draait de job in eigen threads);
+    // de job wordt aan de actieve lijst toegevoegd en door de hoofdlus gepolld.
+    unsafe { (st.raw.disc_write)(opts, disc) };
+    notify.send(Event::BurnStarted {
+        index,
+        total_sectors: expected_sectors,
+        simulate: s.simulate,
+    });
+    notify.log(
+        Level::Info,
+        format!(
+            "Station {index}: branden gestart{}…",
+            if s.simulate {
+                " (SIMULATIE — laser uit)"
+            } else {
+                ""
+            }
+        ),
+    );
     let adr = unsafe { adr_of(&di, &st.raw) };
-    unsafe {
-        run_write_poll(
-            st,
-            di.drive,
-            opts,
-            disc,
-            session,
-            track,
-            fifo,
-            index,
-            expected_sectors,
-            &adr,
-            s,
-            cmds,
-            pending,
-            notify,
-        );
-    }
+    active.push(ActiveJob {
+        index,
+        adr,
+        drive: di.drive,
+        kind: JobKind::Write {
+            simulate: s.simulate,
+        },
+        write: Some(WriteJob {
+            s: s.clone(),
+            res: WriteRes {
+                opts,
+                disc,
+                session,
+                track,
+                source: fifo,
+                data_src: std::ptr::null_mut(),
+                iso_opts: std::ptr::null_mut(),
+                image: std::ptr::null_mut(),
+            },
+        }),
+        started: std::time::Instant::now(),
+        last_progress: std::time::Instant::now(),
+        last_pct: Some(i32::MIN),
+        cancelled: false,
+    });
 }
 
 /// Stelt een data-image samen uit bestanden/mappen (libisofs) en brandt die
@@ -1241,8 +1389,7 @@ fn burn_files_job(
     volume_id: &str,
     import_start_block: Option<i32>,
     s: &BurnSettings,
-    cmds: &Receiver<Command>,
-    pending: &mut VecDeque<Command>,
+    active: &mut Vec<ActiveJob>,
     notify: &Notifier,
 ) {
     use crate::settings::WriteMode;
@@ -1694,30 +1841,51 @@ fn burn_files_job(
         }
     };
 
-    // Branden (gedeelde poll-lus); daarna libisofs-objecten vrijgeven.
-    unsafe {
-        run_write_poll(
-            st,
-            di.drive,
-            opts,
-            disc,
-            session,
-            track,
-            src,
-            index,
-            expected_sectors,
-            &adr,
-            s,
-            cmds,
-            pending,
-            notify,
-        );
-        (iso.write_opts_free)(iso_opts);
-        (iso.image_unref)(image);
-        if !data_src.is_null() {
-            (iso.data_source_unref)(data_src);
-        }
-    }
+    // Branden starten (asynchroon); de libisofs-objecten (image, write-opts,
+    // data-bron) blijven alive tot na de brand — oude bestandsdata wordt
+    // tijdens het schrijven van de schijf gelezen.
+    unsafe { (st.raw.disc_write)(opts, disc) };
+    notify.send(Event::BurnStarted {
+        index,
+        total_sectors: expected_sectors,
+        simulate: s.simulate,
+    });
+    notify.log(
+        Level::Info,
+        format!(
+            "Station {index}: branden gestart{}…",
+            if s.simulate {
+                " (SIMULATIE — laser uit)"
+            } else {
+                ""
+            }
+        ),
+    );
+    active.push(ActiveJob {
+        index,
+        adr,
+        drive: di.drive,
+        kind: JobKind::Write {
+            simulate: s.simulate,
+        },
+        write: Some(WriteJob {
+            s: s.clone(),
+            res: WriteRes {
+                opts,
+                disc,
+                session,
+                track,
+                source: src,
+                data_src,
+                iso_opts,
+                image,
+            },
+        }),
+        started: std::time::Instant::now(),
+        last_progress: std::time::Instant::now(),
+        last_pct: Some(i32::MIN),
+        cancelled: false,
+    });
 }
 
 /// Geeft de imagegrootte terug via de get_size-callback van een burn_source
@@ -1936,186 +2104,230 @@ unsafe fn make_write_opts(
 
 /// Start het branden en pollt tot de drive weer IDLE is; stuurt voortgang,
 /// handelt annuleren af, ruimt het model op en geeft het resultaat als events.
-unsafe fn run_write_poll(
-    st: &WorkerState,
-    drive: *mut ffi::BurnDrive,
-    opts: *mut ffi::BurnWriteOpts,
-    disc: *mut ffi::BurnDisc,
-    session: *mut ffi::BurnSession,
-    track: *mut ffi::BurnTrack,
-    source: *mut ffi::BurnSource,
-    index: usize,
-    total_sectors: i32,
-    adr: &str,
-    s: &BurnSettings,
-    cmds: &Receiver<Command>,
-    pending: &mut VecDeque<Command>,
-    notify: &Notifier,
-) {
-    use crate::settings::MultiSession;
-
-    notify.send(Event::BurnStarted {
-        index,
-        total_sectors,
-        simulate: s.simulate,
-    });
-    notify.log(
-        Level::Info,
-        format!(
-            "Station {index}: branden gestart{}…",
-            if s.simulate {
-                " (SIMULATIE — laser uit)"
-            } else {
-                ""
+/// Pollt één actieve job (voortgang + annuleer-status). Geeft true als de
+/// job klaar is (IDLE) en afgewerkt moet worden via `finalize_job`.
+unsafe fn poll_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier) -> bool {
+    unsafe {
+        let mut prog = Progress::default();
+        let ds = DriveStatus::from_raw((st.raw.drive_get_status)(job.drive, &mut prog));
+        if ds == DriveStatus::Idle {
+            return true;
+        }
+        if let Some(wj) = &job.write {
+            // Write-job: voortgang tijdens de schrijf-fasen.
+            if matches!(
+                ds,
+                DriveStatus::Writing
+                    | DriveStatus::WritingLeadin
+                    | DriveStatus::WritingLeadout
+                    | DriveStatus::WritingPregap
+                    | DriveStatus::ClosingTrack
+                    | DriveStatus::ClosingSession
+            ) && prog.sectors > 0
+                && job.last_progress.elapsed() >= Duration::from_millis(200)
+            {
+                let elapsed = job.started.elapsed().as_secs_f64();
+                let secs = elapsed.max(0.001);
+                let kbps = (prog.sector as f64 * 2048.0) / secs / 1000.0;
+                let eta = if prog.sector > 0 && prog.sector < prog.sectors {
+                    elapsed * ((prog.sectors - prog.sector) as f64 / prog.sector as f64)
+                } else {
+                    0.0
+                };
+                let buffer_pct = if prog.buffer_capacity > 0 {
+                    ((prog.buffer_capacity - prog.buffer_available) as f32
+                        / prog.buffer_capacity as f32)
+                        * 100.0
+                } else {
+                    0.0
+                };
+                let fifo_pct = fifo_fill_pct(&st.raw, wj.res.source);
+                notify.send(Event::BurnProgress {
+                    index: job.index,
+                    sector: prog.sector,
+                    sectors: prog.sectors,
+                    kbps,
+                    buffer_pct,
+                    fifo_pct,
+                    phase: drive_status_label(ds).to_string(),
+                    elapsed_secs: elapsed,
+                    eta_secs: eta,
+                });
+                job.last_progress = std::time::Instant::now();
             }
-        ),
-    );
-    unsafe { (st.raw.disc_write)(opts, disc) };
-
-    let started = std::time::Instant::now();
-    let mut last_progress = started;
-    let mut cancelled = false;
-    loop {
-        // Annuleren/afsluiten tussentijds mogelijk maken.
-        match cmds.try_recv() {
-            Ok(Command::CancelBurn) => {
-                unsafe { (st.raw.drive_cancel)(drive) };
-                cancelled = true;
-            }
-            Ok(Command::Shutdown) => {
-                pending.push_front(Command::Shutdown);
-                unsafe { (st.raw.drive_cancel)(drive) };
-                cancelled = true;
-            }
-            Ok(other) => pending.push_back(other),
-            Err(TryRecvError::Empty) => {}
-            Err(TryRecvError::Disconnected) => {
-                unsafe { (st.raw.drive_cancel)(drive) };
-                cancelled = true;
+        } else {
+            // Onderhoudsjob: wissen/formatteren met percentage.
+            let (label, busy, kind) = match job.kind {
+                JobKind::Erase => ("Wissen", DriveStatus::Erasing, MaintKind::Erase),
+                _ => ("Formatteren", DriveStatus::Formatting, MaintKind::Format),
+            };
+            if ds == busy && prog.sectors > 0 {
+                let pct =
+                    ((prog.sector as f32 / prog.sectors as f32) * 100.0).min(100.0) as i32;
+                if Some(pct) != job.last_pct {
+                    notify.log(Level::Info, format!("{label}… {pct}%"));
+                    notify.send(Event::MaintProgress {
+                        kind,
+                        index: job.index,
+                        pct: pct as f32,
+                    });
+                    job.last_pct = Some(pct);
+                }
             }
         }
+        false
+    }
+}
 
-        thread::sleep(Duration::from_millis(150));
+/// Werk één afgeronde job af: resultaat, opruimen, eject-reeks en events.
+unsafe fn finalize_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier) {
+    unsafe {
+        let well = (st.raw.drive_wrote_well)(job.drive) == 1;
         drain_msgs(&st.raw, notify);
 
-        let mut prog = Progress::default();
-        let ds = DriveStatus::from_raw(unsafe { (st.raw.drive_get_status)(drive, &mut prog) });
-        if ds == DriveStatus::Idle {
-            break;
-        }
+        match &mut job.kind {
+            JobKind::Write { .. } => {
+                if let Some(wj) = job.write.take() {
+                    (st.raw.write_opts_free)(wj.res.opts);
+                    (st.raw.source_free)(wj.res.source);
+                    (st.raw.track_free)(wj.res.track);
+                    (st.raw.session_free)(wj.res.session);
+                    (st.raw.disc_free)(wj.res.disc);
+                    if !wj.res.iso_opts.is_null() {
+                        if let Some(iso) = st.isofs.as_ref() {
+                            (iso.write_opts_free)(wj.res.iso_opts);
+                        }
+                    }
+                    if !wj.res.image.is_null() {
+                        if let Some(iso) = st.isofs.as_ref() {
+                            (iso.image_unref)(wj.res.image);
+                        }
+                    }
+                    if !wj.res.data_src.is_null() {
+                        if let Some(iso) = st.isofs.as_ref() {
+                            (iso.data_source_unref)(wj.res.data_src);
+                        }
+                    }
 
-        // Voortgang sturen tijdens schrijf-fasen.
-        if matches!(
-            ds,
-            DriveStatus::Writing
-                | DriveStatus::WritingLeadin
-                | DriveStatus::WritingLeadout
-                | DriveStatus::WritingPregap
-                | DriveStatus::ClosingTrack
-                | DriveStatus::ClosingSession
-        ) && prog.sectors > 0
-            && last_progress.elapsed() >= Duration::from_millis(200)
-        {
-            let elapsed = started.elapsed().as_secs_f64();
-            let secs = elapsed.max(0.001);
-            let kbps = (prog.sector as f64 * 2048.0) / secs / 1000.0;
-            // ETA: verstreken tijd × (resterend / gedaan), alleen bij echte
-            // voortgang (sector > 0 en nog niet klaar).
-            let eta = if prog.sector > 0 && prog.sector < prog.sectors {
-                elapsed * ((prog.sectors - prog.sector) as f64 / prog.sector as f64)
-            } else {
-                0.0
-            };
-            let buffer_pct = if prog.buffer_capacity > 0 {
-                ((prog.buffer_capacity - prog.buffer_available) as f32
-                    / prog.buffer_capacity as f32)
-                    * 100.0
-            } else {
-                0.0
-            };
-            let fifo_pct = unsafe { fifo_fill_pct(&st.raw, source) };
-            notify.send(Event::BurnProgress {
-                index,
-                sector: prog.sector,
-                sectors: prog.sectors,
-                kbps,
-                buffer_pct,
-                fifo_pct,
-                phase: drive_status_label(ds).to_string(),
-                elapsed_secs: elapsed,
-                eta_secs: eta,
-            });
-            last_progress = std::time::Instant::now();
-        }
-    }
+                    // Eject-reeks (stap 8): een eject van een AANGEKOPPELDE
+                    // schijf wordt door de kernel geweigerd (EBUSY) — eerst
+                    // unmounten, dan opnieuw grabben voor het eject-verzoek.
+                    if wj.s.eject_after {
+                        (st.raw.drive_release)(job.drive, 0);
+                        thread::sleep(Duration::from_millis(300));
+                        if is_dev_mounted(&job.adr) {
+                            notify.log(
+                                Level::Info,
+                                format!(
+                                    "Schijf `{}` is aangekoppeld — eerst unmounten voor de eject…",
+                                    job.adr
+                                ),
+                            );
+                            try_unmount(&job.adr, notify);
+                            thread::sleep(Duration::from_millis(300));
+                        }
+                        let grabbed = (st.raw.drive_grab)(job.drive, 0) == 1;
+                        if grabbed {
+                            (st.raw.drive_release)(job.drive, 1);
+                            notify.log(Level::Info, "Eject-verzoek verzonden");
+                            notify.send(Event::MediaEjected { index: job.index });
+                        } else {
+                            notify.log(
+                                Level::Warning,
+                                "Kon het station niet opnieuw grabben voor de eject — \
+                                 eject handmatig nodig",
+                            );
+                        }
+                    } else {
+                        (st.raw.drive_release)(job.drive, 0);
+                        notify.log(Level::Info, "Drive vrijgegeven");
+                    }
 
-    // Resultaat en opruimen.
-    let well = unsafe { (st.raw.drive_wrote_well)(drive) } == 1;
-    drain_msgs(&st.raw, notify);
-    unsafe {
-        (st.raw.write_opts_free)(opts);
-        (st.raw.source_free)(source);
-        (st.raw.track_free)(track);
-        (st.raw.session_free)(session);
-        (st.raw.disc_free)(disc);
-    }
-
-    // Eject-reeks (stap 8): een eject van een AANGEKOPPELDE schijf wordt
-    // door de kernel geweigerd (EBUSY) — en de net-geschreven schijf wordt
-    // door udisks2 vaak meteen aangekoppeld. Daarom: eerst de drive loslaten
-    // (zonder eject), eventuele aankoppeling ontmantelen en daarna opnieuw
-    // grabben voor het eject-verzoek.
-    if s.eject_after {
-        unsafe { (st.raw.drive_release)(drive, 0) };
-        thread::sleep(Duration::from_millis(300));
-        if is_dev_mounted(adr) {
-            notify.log(
-                Level::Info,
-                format!("Schijf `{adr}` is aangekoppeld — eerst unmounten voor de eject…"),
-            );
-            try_unmount(adr, notify);
-            thread::sleep(Duration::from_millis(300));
-        }
-        let grabbed = unsafe { (st.raw.drive_grab)(drive, 0) } == 1;
-        if grabbed {
-            unsafe { (st.raw.drive_release)(drive, 1) };
-            notify.log(Level::Info, "Eject-verzoek verzonden");
-        } else {
-            notify.log(
-                Level::Warning,
-                "Kon het station niet opnieuw grabben voor de eject — \
-                 eject handmatig nodig",
-            );
-        }
-        // De schijf is (op weg) uit de drive: de mediagegevens in de GUI
-        // zijn verouderd en worden gewist.
-        notify.send(Event::MediaEjected { index });
-    } else {
-        unsafe { (st.raw.drive_release)(drive, 0) };
-        notify.log(Level::Info, "Drive vrijgegeven");
-    }
-
-    if cancelled {
-        notify.log(Level::Warning, "Brandjob geannuleerd");
-        notify.send(Event::BurnCancelled);
-    } else if well {
-        notify.log(
-            Level::Success,
-            format!(
-                "Station {index}: brandjob klaar{} — media {}",
-                if s.simulate { " (simulatie)" } else { "" },
-                if s.multi_session == MultiSession::KeepOpen {
-                    "blijft appendable"
-                } else {
-                    "is afgesloten"
+                    if job.cancelled {
+                        notify.log(Level::Warning, "Brandjob geannuleerd");
+                        notify.send(Event::BurnCancelled { index: job.index });
+                    } else if well {
+                        notify.log(
+                            Level::Success,
+                            format!(
+                                "Station {}: brandjob klaar{} — media {}",
+                                job.index,
+                                if wj.s.simulate { " (simulatie)" } else { "" },
+                                if wj.s.multi_session
+                                    == crate::settings::MultiSession::KeepOpen
+                                {
+                                    "blijft appendable"
+                                } else {
+                                    "is afgesloten"
+                                }
+                            ),
+                        );
+                        notify.send(Event::BurnDone { index: job.index });
+                    } else {
+                        let msg =
+                            "Brandjob mislukt — zie de libburn-meldingen hierboven".to_string();
+                        notify.log(Level::Error, &msg);
+                        notify.send(Event::BurnFailed {
+                            index: job.index,
+                            error: msg,
+                        });
+                    }
                 }
-            ),
-        );
-        notify.send(Event::BurnDone);
-    } else {
-        let msg = "Brandjob mislukt — zie de libburn-meldingen hierboven".to_string();
-        notify.log(Level::Error, &msg);
-        notify.send(Event::BurnFailed { index, error: msg });
+            }
+            JobKind::Erase => {
+                (st.raw.drive_re_assess)(job.drive, 0);
+                (st.raw.drive_release)(job.drive, 0);
+                if job.cancelled {
+                    notify.log(Level::Warning, "Wissen geannuleerd");
+                    notify.send(Event::MaintCancelled {
+                        kind: MaintKind::Erase,
+                        index: job.index,
+                    });
+                } else if well {
+                    notify.log(Level::Success, "Media gewist");
+                    notify.send(Event::MaintDone {
+                        kind: MaintKind::Erase,
+                        index: job.index,
+                    });
+                } else {
+                    let msg =
+                        "Wissen mislukt — zie de libburn-meldingen hierboven".to_string();
+                    notify.log(Level::Error, &msg);
+                    notify.send(Event::MaintFailed {
+                        kind: MaintKind::Erase,
+                        index: job.index,
+                        error: msg,
+                    });
+                }
+            }
+            JobKind::Format => {
+                (st.raw.drive_re_assess)(job.drive, 0);
+                (st.raw.drive_release)(job.drive, 0);
+                if job.cancelled {
+                    notify.log(Level::Warning, "Formatteren geannuleerd");
+                    notify.send(Event::MaintCancelled {
+                        kind: MaintKind::Format,
+                        index: job.index,
+                    });
+                } else if well {
+                    notify.log(Level::Success, "Media geformatteerd");
+                    notify.send(Event::MaintDone {
+                        kind: MaintKind::Format,
+                        index: job.index,
+                    });
+                } else {
+                    let msg = "Formatteren mislukt — zie de libburn-meldingen \
+                               hierboven"
+                        .to_string();
+                    notify.log(Level::Error, &msg);
+                    notify.send(Event::MaintFailed {
+                        kind: MaintKind::Format,
+                        index: job.index,
+                        error: msg,
+                    });
+                }
+            }
+        }
     }
 }
 
@@ -2347,84 +2559,12 @@ fn try_unmount(dev: &str, notify: &Notifier) {
     }
 }
 
-/// Draait een wis- of format-job en pollt tot de drive weer IDLE is.
-/// Stuurt MaintProgress-events (als kind/index bekend zijn), handelt
-/// annuleren/afsluiten af en geeft de resultaatcheck terug. Err betekent
-/// geannuleerd/verbinding weg (de drive is dan al gecanceld).
-fn wait_media_job(
-    st: &WorkerState,
-    drive: *mut ffi::BurnDrive,
-    label: &str,
-    busy_status: DriveStatus,
-    maint: Option<(MaintKind, usize)>,
-    cmds: &Receiver<Command>,
-    pending: &mut VecDeque<Command>,
-    notify: &Notifier,
-) -> Result<bool, ()> {
-    // None = onbepaalde voortgang (drive geeft geen sectoren door);
-    // Some(i32::MIN) = nog niets gelogd.
-    let mut last_pct: Option<i32> = Some(i32::MIN);
-    loop {
-        match cmds.try_recv() {
-            Ok(Command::CancelBurn) => {
-                unsafe { (st.raw.drive_cancel)(drive) };
-                return Err(());
-            }
-            Ok(Command::Shutdown) => {
-                pending.push_front(Command::Shutdown);
-                unsafe { (st.raw.drive_cancel)(drive) };
-                return Err(());
-            }
-            Ok(other) => pending.push_back(other),
-            Err(TryRecvError::Empty) => {}
-            Err(TryRecvError::Disconnected) => {
-                unsafe { (st.raw.drive_cancel)(drive) };
-                return Err(());
-            }
-        }
-        thread::sleep(Duration::from_millis(150));
-        drain_msgs(&st.raw, notify);
-        let mut prog = Progress::default();
-        let ds = DriveStatus::from_raw(unsafe { (st.raw.drive_get_status)(drive, &mut prog) });
-        if ds == DriveStatus::Idle {
-            break;
-        }
-        if ds == busy_status {
-            // Bij sommige media (bijv. DVD+RW) rapporteert de drive geen
-            // sector-voortgang tijdens het formatteren; toon dan "bezig"
-            // i.p.v. een misleidend 0%.
-            let pct = if prog.sectors > 0 {
-                Some(((prog.sector as f32 / prog.sectors as f32) * 100.0).min(100.0) as i32)
-            } else {
-                None
-            };
-            let changed = pct != last_pct;
-            if changed {
-                match pct {
-                    Some(p) => notify.log(Level::Info, format!("{label}… {p}%")),
-                    None => notify.log(Level::Info, format!("{label}… bezig")),
-                }
-                if let Some((kind, index)) = maint {
-                    notify.send(Event::MaintProgress {
-                        kind,
-                        index,
-                        pct: pct.unwrap_or(0) as f32,
-                    });
-                }
-                last_pct = pct;
-            }
-        }
-    }
-    Ok(unsafe { (st.raw.drive_wrote_well)(drive) } == 1)
-}
-
 /// Wis de media los van een brandjob (stap 6).
 fn erase_job(
     state: &Option<WorkerState>,
     index: usize,
     fast: bool,
-    cmds: &Receiver<Command>,
-    pending: &mut VecDeque<Command>,
+    active: &mut Vec<ActiveJob>,
     notify: &Notifier,
 ) {
     let Some(st) = state else {
@@ -2508,46 +2648,18 @@ fn erase_job(
     }
 
     unsafe { (st.raw.disc_erase)(di.drive, fast as c_int) };
-    let well = match wait_media_job(
-        st,
-        di.drive,
-        "Wissen",
-        DriveStatus::Erasing,
-        Some((MaintKind::Erase, index)),
-        cmds,
-        pending,
-        notify,
-    ) {
-        Ok(w) => w,
-        Err(()) => {
-            unsafe { (st.raw.drive_release)(di.drive, 0) };
-            notify.log(Level::Warning, "Wissen geannuleerd");
-            notify.send(Event::MaintCancelled {
-                kind: MaintKind::Erase,
-                index,
-            });
-            return;
-        }
-    };
-    unsafe { (st.raw.drive_re_assess)(di.drive, 0) };
-    drain_msgs(&st.raw, notify);
-    unsafe { (st.raw.drive_release)(di.drive, 0) };
-
-    if well {
-        notify.log(Level::Success, "Media gewist");
-        notify.send(Event::MaintDone {
-            kind: MaintKind::Erase,
-            index,
-        });
-    } else {
-        let msg = "Wissen mislukt — zie de libburn-meldingen hierboven".to_string();
-        notify.log(Level::Error, &msg);
-        notify.send(Event::MaintFailed {
-            kind: MaintKind::Erase,
-            index,
-            error: msg,
-        });
-    }
+    let adr = unsafe { adr_of(&di, &st.raw) };
+    active.push(ActiveJob {
+        index,
+        adr,
+        drive: di.drive,
+        kind: JobKind::Erase,
+        write: None,
+        started: std::time::Instant::now(),
+        last_progress: std::time::Instant::now(),
+        last_pct: Some(i32::MIN),
+        cancelled: false,
+    });
 }
 
 /// Profielen waarop formatteren zinvol heeft (DVD-RW seq → RO, DVD-RW RO,
@@ -2561,8 +2673,7 @@ fn format_job(
     state: &Option<WorkerState>,
     index: usize,
     s: &BurnSettings,
-    cmds: &Receiver<Command>,
-    pending: &mut VecDeque<Command>,
+    active: &mut Vec<ActiveJob>,
     notify: &Notifier,
 ) {
     let Some(st) = state else {
@@ -2649,46 +2760,18 @@ fn format_job(
          minuten duren…",
     );
     unsafe { (st.raw.disc_format)(di.drive, 0, fmt_flag) };
-    let well = match wait_media_job(
-        st,
-        di.drive,
-        "Formatteren",
-        DriveStatus::Formatting,
-        Some((MaintKind::Format, index)),
-        cmds,
-        pending,
-        notify,
-    ) {
-        Ok(w) => w,
-        Err(()) => {
-            unsafe { (st.raw.drive_release)(di.drive, 0) };
-            notify.log(Level::Warning, "Formatteren geannuleerd");
-            notify.send(Event::MaintCancelled {
-                kind: MaintKind::Format,
-                index,
-            });
-            return;
-        }
-    };
-    unsafe { (st.raw.drive_re_assess)(di.drive, 0) };
-    drain_msgs(&st.raw, notify);
-    unsafe { (st.raw.drive_release)(di.drive, 0) };
-
-    if well {
-        notify.log(Level::Success, "Media geformatteerd");
-        notify.send(Event::MaintDone {
-            kind: MaintKind::Format,
-            index,
-        });
-    } else {
-        let msg = "Formatteren mislukt — zie de libburn-meldingen hierboven".to_string();
-        notify.log(Level::Error, &msg);
-        notify.send(Event::MaintFailed {
-            kind: MaintKind::Format,
-            index,
-            error: msg,
-        });
-    }
+    let adr = unsafe { adr_of(&di, &st.raw) };
+    active.push(ActiveJob {
+        index,
+        adr,
+        drive: di.drive,
+        kind: JobKind::Format,
+        write: None,
+        started: std::time::Instant::now(),
+        last_progress: std::time::Instant::now(),
+        last_pct: Some(i32::MIN),
+        cancelled: false,
+    });
 }
 
 /// Maakt een schijfkopie van de datamedia naar een bestand.
