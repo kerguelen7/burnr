@@ -7,7 +7,7 @@
 //! De types hieronder zijn afgeleid uit `docs/libisofs.h` (libisofs 1.5.6)
 //! en moeten overeenkomen met de geïnstalleerde library.
 
-use std::ffi::{c_char, c_int};
+use std::ffi::{c_char, c_int, c_uint};
 
 use libloading::Library;
 
@@ -39,6 +39,24 @@ pub struct IsoNode {
 /// Opaque handle naar `struct IsoWriteOpts`.
 #[repr(C)]
 pub struct IsoWriteOpts {
+    _private: [u8; 0],
+}
+
+/// Opaque handle naar `struct IsoDataSource` (leesbron voor bestaande images).
+#[repr(C)]
+pub struct IsoDataSource {
+    _private: [u8; 0],
+}
+
+/// Opaque handle naar `struct IsoReadOpts`.
+#[repr(C)]
+pub struct IsoReadOpts {
+    _private: [u8; 0],
+}
+
+/// Opaque handle naar `struct IsoReadImageFeatures`.
+#[repr(C)]
+pub struct IsoReadImageFeatures {
     _private: [u8; 0],
 }
 
@@ -77,6 +95,23 @@ pub struct RawLibisofs {
     pub write_opts_set_joliet: unsafe extern "C" fn(*mut IsoWriteOpts, c_int) -> c_int,
     pub write_opts_set_replace_timestamps: unsafe extern "C" fn(*mut IsoWriteOpts, c_int) -> c_int,
     pub write_opts_set_dir_rec_mtime: unsafe extern "C" fn(*mut IsoWriteOpts, c_int) -> c_int,
+    // Multi-session import (stap 7): bestaande sessie inlezen en voortzetten.
+    pub data_source_new_from_file:
+        unsafe extern "C" fn(*const c_char, *mut *mut IsoDataSource) -> c_int,
+    pub data_source_unref: unsafe extern "C" fn(*mut IsoDataSource),
+    pub read_opts_new: unsafe extern "C" fn(*mut *mut IsoReadOpts, c_int) -> c_int,
+    pub read_opts_free: unsafe extern "C" fn(*mut IsoReadOpts),
+    pub read_opts_set_start_block: unsafe extern "C" fn(*mut IsoReadOpts, c_uint) -> c_int,
+    pub image_import: unsafe extern "C" fn(
+        *mut IsoImage,
+        *mut IsoDataSource,
+        *mut IsoReadOpts,
+        *mut *mut IsoReadImageFeatures,
+    ) -> c_int,
+    pub read_image_features_destroy: unsafe extern "C" fn(*mut IsoReadImageFeatures),
+    pub read_image_features_get_size: unsafe extern "C" fn(*const IsoReadImageFeatures) -> c_uint,
+    pub write_opts_set_appendable: unsafe extern "C" fn(*mut IsoWriteOpts, c_int) -> c_int,
+    pub write_opts_set_ms_block: unsafe extern "C" fn(*mut IsoWriteOpts, c_uint) -> c_int,
     pub image_create_burn_source:
         unsafe extern "C" fn(*mut IsoImage, *mut IsoWriteOpts, *mut *mut BurnSource) -> c_int,
 }
@@ -189,6 +224,61 @@ impl RawLibisofs {
                 "iso_write_opts_set_dir_rec_mtime",
                 unsafe extern "C" fn(*mut IsoWriteOpts, c_int) -> c_int
             );
+            let data_source_new_from_file = resolve_iso!(
+                lib,
+                "iso_data_source_new_from_file",
+                unsafe extern "C" fn(*const c_char, *mut *mut IsoDataSource) -> c_int
+            );
+            let data_source_unref = resolve_iso!(
+                lib,
+                "iso_data_source_unref",
+                unsafe extern "C" fn(*mut IsoDataSource)
+            );
+            let read_opts_new = resolve_iso!(
+                lib,
+                "iso_read_opts_new",
+                unsafe extern "C" fn(*mut *mut IsoReadOpts, c_int) -> c_int
+            );
+            let read_opts_free = resolve_iso!(
+                lib,
+                "iso_read_opts_free",
+                unsafe extern "C" fn(*mut IsoReadOpts)
+            );
+            let read_opts_set_start_block = resolve_iso!(
+                lib,
+                "iso_read_opts_set_start_block",
+                unsafe extern "C" fn(*mut IsoReadOpts, c_uint) -> c_int
+            );
+            let image_import = resolve_iso!(
+                lib,
+                "iso_image_import",
+                unsafe extern "C" fn(
+                    *mut IsoImage,
+                    *mut IsoDataSource,
+                    *mut IsoReadOpts,
+                    *mut *mut IsoReadImageFeatures,
+                ) -> c_int
+            );
+            let read_image_features_destroy = resolve_iso!(
+                lib,
+                "iso_read_image_features_destroy",
+                unsafe extern "C" fn(*mut IsoReadImageFeatures)
+            );
+            let read_image_features_get_size = resolve_iso!(
+                lib,
+                "iso_read_image_features_get_size",
+                unsafe extern "C" fn(*const IsoReadImageFeatures) -> c_uint
+            );
+            let write_opts_set_appendable = resolve_iso!(
+                lib,
+                "iso_write_opts_set_appendable",
+                unsafe extern "C" fn(*mut IsoWriteOpts, c_int) -> c_int
+            );
+            let write_opts_set_ms_block = resolve_iso!(
+                lib,
+                "iso_write_opts_set_ms_block",
+                unsafe extern "C" fn(*mut IsoWriteOpts, c_uint) -> c_int
+            );
             let image_create_burn_source = resolve_iso!(
                 lib,
                 "iso_image_create_burn_source",
@@ -219,6 +309,16 @@ impl RawLibisofs {
                 write_opts_set_joliet,
                 write_opts_set_replace_timestamps,
                 write_opts_set_dir_rec_mtime,
+                data_source_new_from_file,
+                data_source_unref,
+                read_opts_new,
+                read_opts_free,
+                read_opts_set_start_block,
+                image_import,
+                read_image_features_destroy,
+                read_image_features_get_size,
+                write_opts_set_appendable,
+                write_opts_set_ms_block,
                 image_create_burn_source,
             })
         }

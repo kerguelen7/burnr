@@ -103,9 +103,15 @@ cargo build --release
   Slimme knop-activering per profiel (overschrijfbare media → formatteren
   i.p.v. wissen), voortgang in log én UI, annuleren, en de wis-flow van de
   brand-flow deelt nu één gedeelde wachtlus.
-- [x] **Stap 7 — OVERGESLAGEN** (grow op overschrijfbare media): libburn's
-  weigering van `multi=1` op overschrijfbare media is technisch juist; de
-  meerwaarde van grow rechtvaardigt de complexiteit niet voor nu.
+- [x] **Stap 7 — Multi-session met import (schrijf-eenmalige media)**:
+  bestanden toevoegen aan een beschreven BD-R/DVD-R/DVD+R/CD-R met behoud van
+  de bestaande inhoud. De bestaande sessie wordt geïmporteerd
+  (`iso_data_source_new_from_file` + `iso_image_import` met start-blok uit de
+  TOC), nieuwe bestanden komen in dezelfde boom, en de nieuwe sessie wordt
+  geschreven op het NWA met `appendable` + `ms_block` — de oude bestandsdata
+  blijft fysiek intact. De data-bron blijft alive tot na de brand (oude
+  bestandsdata wordt tijdens het schrijven van de schijf gelezen). Alleen
+  voor schrijf-eenmalige media; DVD+RW/BD-RE gebruiken overschrijven.
 - [x] **Stap 8 — Instellingen persistent opslaan + uitbreidingen**:
   alle instellingen, exclusief-openen, bronkeuze en laatst-gebruikte paden
   worden via eframe-persistence bewaard en bij de start geladen. Daarnaast:

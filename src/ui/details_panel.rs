@@ -617,6 +617,18 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
                 "Maakt een ISO9660-image (Rock Ridge + Joliet, ISO-niveau 3) met \
                  libisofs en brandt die direct — geen tussenbestand.",
             );
+            // Multi-session import (stap 7): bij appendable schrijf-eenmalige
+            // media wordt de bestaande sessie geïmporteerd.
+            if d.media
+                .as_ref()
+                .is_some_and(|m| m.disc_status == DiscStatus::Appendable)
+            {
+                ui.colored_label(
+                    colors::OK,
+                    "ℹ Bestaande sessie wordt geïmporteerd — nieuwe bestanden \
+                     komen bij de bestaande inhoud.",
+                );
+            }
         }
     }
 

@@ -497,6 +497,22 @@ impl App {
         } else {
             self.volume_id.trim().to_string()
         };
+        // Multi-session import (stap 7): als de media appendable is en de
+        // inspectie sessies vond, importeren we de laatste sessie zodat de
+        // nieuwe bestanden bij de bestaande inhoud komen.
+        let import_active = self
+            .selected
+            .and_then(|i| self.drives.get(i))
+            .and_then(|d| d.media.as_ref())
+            .is_some_and(|m| m.disc_status == crate::ffi::DiscStatus::Appendable);
+        let import_start_block = self
+            .selected
+            .and_then(|i| self.drives.get(i))
+            .and_then(|d| d.media.as_ref())
+            .and_then(|m| m.sessions.last())
+            .map(|s| s.start_lba)
+            .filter(|&b| b >= 0)
+            .filter(|_| import_active);
         self.log.push(
             Level::Info,
             format!(
@@ -511,6 +527,7 @@ impl App {
             paths: self.burn_files.clone(),
             volume_id: volume,
             settings: self.settings.clone(),
+            import_start_block,
         });
     }
 

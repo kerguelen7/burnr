@@ -6,7 +6,7 @@
 //! voor duidelijke feedback, en elke event laat de UI hervappen.
 
 use std::collections::VecDeque;
-use std::ffi::{c_char, c_int, c_longlong, c_void};
+use std::ffi::{c_char, c_int, c_longlong, c_uint, c_void};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -172,11 +172,14 @@ pub enum Command {
         settings: BurnSettings,
     },
     /// Stel een data-image samen uit bestanden/mappen (libisofs) en brand die.
+    /// `import_start_block` = beg blok van de te importeren sessie (multi-session
+    /// op schrijf-eenmalige media).
     BurnFiles {
         index: usize,
         paths: Vec<String>,
         volume_id: String,
         settings: BurnSettings,
+        import_start_block: Option<i32>,
     },
     /// Wis de media los van een brandjob (stap 6).
     EraseDisc {
@@ -395,11 +398,13 @@ fn run(cmds: Receiver<Command>, events: Sender<Event>, ctx: egui::Context) {
                 paths,
                 volume_id,
                 settings,
+                import_start_block,
             } => burn_files_job(
                 &state,
                 index,
                 &paths,
                 &volume_id,
+                import_start_block,
                 &settings,
                 &cmds,
                 &mut pending,
@@ -1217,6 +1222,7 @@ fn burn_files_job(
     index: usize,
     paths: &[String],
     volume_id: &str,
+    import_start_block: Option<i32>,
     s: &BurnSettings,
     cmds: &Receiver<Command>,
     pending: &mut VecDeque<Command>,
@@ -1265,6 +1271,7 @@ fn burn_files_job(
     }
 
     let di = unsafe { *st.infos.add(index) };
+    let adr = unsafe { adr_of(&di, &st.raw) };
     notify.log(
         Level::Info,
         format!(
@@ -1289,12 +1296,10 @@ fn burn_files_job(
         ),
     );
 
-    // Grab + media-check (gedeelde flow).
-    if grab_and_check_media(st, &di, index, notify).is_err() {
-        return;
-    }
-
-    // ISO-image opbouwen in libisofs.
+    // ISO-image opbouwen in libisofs. Bij multi-session op schrijf-eenmalige
+    // media wordt de bestaande sessie EERST geïmporteerd (vóór de grab, zodat
+    // libisofs het device zelf kan openen); de nieuwe bestanden komen dan in
+    // dezelfde boom als de bestaande inhoud.
     let vol = if volume_id.trim().is_empty() {
         format!("Libburn{}", chrono::Local::now().format("%Y%m%d"))
     } else {
@@ -1305,7 +1310,6 @@ fn burn_files_job(
         Err(_) => {
             let msg = "Ongeldige volumenaam (bevat NUL-byte)".to_string();
             notify.log(Level::Error, &msg);
-            unsafe { (st.raw.drive_release)(di.drive, 0) };
             notify.send(Event::BurnFailed { index, error: msg });
             return;
         }
@@ -1315,12 +1319,83 @@ fn burn_files_job(
         if (iso.image_new)(vol_c.as_ptr(), &mut image) != ISO_SUCCESS || image.is_null() {
             let msg = "Kan de ISO-image niet aanmaken".to_string();
             notify.log(Level::Error, &msg);
-            (st.raw.drive_release)(di.drive, 0);
             notify.send(Event::BurnFailed { index, error: msg });
             return;
         }
         image
     };
+
+    // Bestaande sessie importeren (multi-session op schrijf-eenmalige media).
+    // De data-bron blijft bewust alive tot na de brand: oude bestandsdata
+    // wordt tijdens het branden van de schijf gelezen.
+    let mut data_src: *mut crate::isofs::IsoDataSource = std::ptr::null_mut();
+    if let Some(start_block) = import_start_block {
+        notify.log(
+            Level::Info,
+            format!(
+                "Bestaande sessie (begin LBA {start_block}) wordt geïmporteerd — \
+                 nieuwe bestanden komen bij de bestaande inhoud…"
+            ),
+        );
+        let dev_c = match std::ffi::CString::new(adr.as_str()) {
+            Ok(c) => c,
+            Err(_) => {
+                let msg = "Ongeldig apparaatpad (bevat NUL-byte)".to_string();
+                notify.log(Level::Error, &msg);
+                unsafe { (iso.image_unref)(image) };
+                notify.send(Event::BurnFailed { index, error: msg });
+                return;
+            }
+        };
+        unsafe {
+            let mut ds: *mut crate::isofs::IsoDataSource = std::ptr::null_mut();
+            if (iso.data_source_new_from_file)(dev_c.as_ptr(), &mut ds) != ISO_SUCCESS
+                || ds.is_null()
+            {
+                let msg = "Kan de schijf niet als leesbron openen".to_string();
+                notify.log(Level::Error, &msg);
+                (iso.image_unref)(image);
+                notify.send(Event::BurnFailed { index, error: msg });
+                return;
+            }
+            let mut ropts: *mut crate::isofs::IsoReadOpts = std::ptr::null_mut();
+            if (iso.read_opts_new)(&mut ropts, 0) != ISO_SUCCESS || ropts.is_null() {
+                let msg = "Kan de lees-opties niet aanmaken".to_string();
+                notify.log(Level::Error, &msg);
+                (iso.data_source_unref)(ds);
+                (iso.image_unref)(image);
+                notify.send(Event::BurnFailed { index, error: msg });
+                return;
+            }
+            (iso.read_opts_set_start_block)(ropts, start_block as c_uint);
+            let mut features: *mut crate::isofs::IsoReadImageFeatures = std::ptr::null_mut();
+            let r = (iso.image_import)(image, ds, ropts, &mut features);
+            if features.is_null() == false {
+                let blocks = (iso.read_image_features_get_size)(features);
+                notify.log(
+                    Level::Info,
+                    format!(
+                        "Bestaande sessie geïmporteerd: {blocks} blokken (≈ {})",
+                        format_blocks(blocks as i32)
+                    ),
+                );
+                (iso.read_image_features_destroy)(features);
+            }
+            (iso.read_opts_free)(ropts);
+            drain_iso_msgs(iso, notify);
+            if r != ISO_SUCCESS {
+                let msg = "Importeren van de bestaande sessie mislukt — zie de \
+                           libisofs-meldingen"
+                    .to_string();
+                notify.log(Level::Error, &msg);
+                (iso.data_source_unref)(ds);
+                (iso.image_unref)(image);
+                notify.send(Event::BurnFailed { index, error: msg });
+                return;
+            }
+            data_src = ds; // alive tot na de brand
+        }
+    }
 
     // Bestanden/mappen toevoegen (met unieke namen bij dubbele basenames).
     // Mappen: eerst een map-node met de mapnaam, daarna de inhoud recursief
@@ -1396,13 +1471,35 @@ fn burn_files_job(
         if add_errors.len() == paths.len() {
             let msg = "Geen enkel item kon aan de image worden toegevoegd".to_string();
             notify.log(Level::Error, &msg);
-            unsafe {
-                (iso.image_unref)(image);
-                (st.raw.drive_release)(di.drive, 0);
-            }
+            unsafe { (iso.image_unref)(image) };
             notify.send(Event::BurnFailed { index, error: msg });
             return;
         }
+    }
+
+    // Grab + media-check (gedeelde flow) — ná het importeren, want libisofs
+    // mocht het device zelf openen.
+    if grab_and_check_media(st, &di, index, notify).is_err() {
+        unsafe { (iso.image_unref)(image) };
+        return;
+    }
+
+    // NWA: waar de nieuwe sessie begint (multi-session import).
+    let (mut lba, mut nwa): (c_int, c_int) = (0, 0);
+    let nwa_ok = unsafe {
+        (st.raw.disc_track_lba_nwa)(di.drive, std::ptr::null_mut(), 0, &mut lba, &mut nwa)
+    } == 1;
+    if import_start_block.is_some() && !nwa_ok {
+        let msg = "Kan de volgende schrijfadres (NWA) niet bepalen — \
+                   multi-session voortzetten mislukt"
+            .to_string();
+        notify.log(Level::Error, &msg);
+        unsafe { (iso.image_unref)(image) };
+        notify.send(Event::BurnFailed { index, error: msg });
+        return;
+    }
+    if import_start_block.is_some() {
+        notify.log(Level::Info, format!("Nieuwe sessie begint op LBA {nwa}"));
     }
 
     // libisofs write-opts: profiel 2 (DISTRIBUTION) = Rock Ridge + Joliet.
@@ -1412,7 +1509,6 @@ fn burn_files_job(
             let msg = "Kan de libisofs write-opts niet aanmaken".to_string();
             notify.log(Level::Error, &msg);
             (iso.image_unref)(image);
-            (st.raw.drive_release)(di.drive, 0);
             notify.send(Event::BurnFailed { index, error: msg });
             return;
         }
@@ -1428,6 +1524,12 @@ fn burn_files_job(
         } else {
             (iso.write_opts_set_replace_timestamps)(opts, 1);
         }
+        // Multi-session: appendable + ms_block zodat libisofs verwijzingen
+        // naar de oude bestandsdata in de vorige sessie kan opnemen.
+        if import_start_block.is_some() {
+            (iso.write_opts_set_appendable)(opts, 1);
+            (iso.write_opts_set_ms_block)(opts, nwa as c_uint);
+        }
         opts
     };
 
@@ -1442,7 +1544,6 @@ fn burn_files_job(
             notify.log(Level::Error, &msg);
             (iso.write_opts_free)(iso_opts);
             (iso.image_unref)(image);
-            (st.raw.drive_release)(di.drive, 0);
             notify.send(Event::BurnFailed { index, error: msg });
             return;
         }
@@ -1460,7 +1561,6 @@ fn burn_files_job(
         unsafe {
             (iso.write_opts_free)(iso_opts);
             (iso.image_unref)(image);
-            (st.raw.drive_release)(di.drive, 0);
         }
         notify.send(Event::BurnFailed { index, error: msg });
         return;
@@ -1476,7 +1576,6 @@ fn burn_files_job(
             (st.raw.source_free)(src);
             (iso.write_opts_free)(iso_opts);
             (iso.image_unref)(image);
-            (st.raw.drive_release)(di.drive, 0);
         }
         notify.send(Event::BurnFailed { index, error: msg });
         return;
@@ -1521,7 +1620,6 @@ fn burn_files_job(
             (st.raw.source_free)(src);
             (iso.write_opts_free)(iso_opts);
             (iso.image_unref)(image);
-            (st.raw.drive_release)(di.drive, 0);
             notify.send(Event::BurnFailed { index, error: msg });
             return;
         }
@@ -1540,7 +1638,6 @@ fn burn_files_job(
             (st.raw.source_free)(src);
             (iso.write_opts_free)(iso_opts);
             (iso.image_unref)(image);
-            (st.raw.drive_release)(di.drive, 0);
         }
         notify.send(Event::BurnFailed { index, error: msg });
         return;
@@ -1557,7 +1654,6 @@ fn burn_files_job(
                 (st.raw.disc_free)(disc);
                 (iso.write_opts_free)(iso_opts);
                 (iso.image_unref)(image);
-                (st.raw.drive_release)(di.drive, 0);
             }
             notify.send(Event::BurnFailed { index, error: msg });
             return;
@@ -1565,7 +1661,6 @@ fn burn_files_job(
     };
 
     // Branden (gedeelde poll-lus); daarna libisofs-objecten vrijgeven.
-    let adr = unsafe { adr_of(&di, &st.raw) };
     unsafe {
         run_write_poll(
             st,
@@ -1585,6 +1680,9 @@ fn burn_files_job(
         );
         (iso.write_opts_free)(iso_opts);
         (iso.image_unref)(image);
+        if !data_src.is_null() {
+            (iso.data_source_unref)(data_src);
+        }
     }
 }
 
