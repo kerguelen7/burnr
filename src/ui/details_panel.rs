@@ -469,7 +469,12 @@ fn read_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
 fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
     use crate::app::BurnSourceKind;
 
-    if let Some(b) = app.active_burns.iter().find(|b| b.index == d.index).cloned() {
+    if let Some(b) = app
+        .active_burns
+        .iter()
+        .find(|b| b.index == d.index)
+        .cloned()
+    {
         if b.index == d.index {
             let frac = b.fraction();
             ui.add(egui::ProgressBar::new(frac).show_percentage());
@@ -586,6 +591,13 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
             "Bestanden",
         );
     });
+    if app.drives.len() > 1 {
+        ui.weak(
+            "Bij meerdere stations: de gekozen bron en instellingen gaan naar \
+             élle stations waar je tegelijk een brand start — per station \
+             verschillende inhoud wordt niet ondersteund.",
+        );
+    }
 
     match app.burn_source_kind {
         BurnSourceKind::IsoFile => {
@@ -713,7 +725,12 @@ fn maint_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry
 
     ui.label(egui::RichText::new("Onderhoud").strong());
 
-    if let Some(m) = app.active_maints.iter().find(|m| m.index == d.index).cloned() {
+    if let Some(m) = app
+        .active_maints
+        .iter()
+        .find(|m| m.index == d.index)
+        .cloned()
+    {
         if m.index == d.index {
             ui.horizontal(|ui| {
                 ui.spinner();

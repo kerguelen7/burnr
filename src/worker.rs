@@ -533,6 +533,9 @@ fn run(cmds: Receiver<Command>, events: Sender<Event>, ctx: egui::Context) {
                 active.clear();
                 continue;
             };
+            // libburn-meldingen live doorgeven (fouten zichtbaar tijdens de
+            // job, niet pas bij de afronding).
+            drain_msgs(&st.raw, &notify);
             let mut keep: Vec<ActiveJob> = Vec::new();
             while let Some(mut job) = active.pop() {
                 let done = unsafe { poll_job(st, &mut job, &notify) };
@@ -2226,7 +2229,22 @@ unsafe fn finalize_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier)
                             try_unmount(&job.adr, notify);
                             thread::sleep(Duration::from_millis(300));
                         }
-                        let grabbed = (st.raw.drive_grab)(job.drive, 0) == 1;
+                        // De drive/udisks kan na het unmounten even bezig
+                        // zijn; een paar pogingen met pauze lost dat meestal.
+                        let mut grabbed = false;
+                        for poging in 1..=5 {
+                            if (st.raw.drive_grab)(job.drive, 0) == 1 {
+                                grabbed = true;
+                                break;
+                            }
+                            notify.log(
+                                Level::Info,
+                                format!(
+                                    "Re-grab poging {poging} mislukt — nogmaals over een seconde…"
+                                ),
+                            );
+                            thread::sleep(Duration::from_secs(1));
+                        }
                         if grabbed {
                             (st.raw.drive_release)(job.drive, 1);
                             notify.log(Level::Info, "Eject-verzoek verzonden");
@@ -2264,8 +2282,13 @@ unsafe fn finalize_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier)
                         );
                         notify.send(Event::BurnDone { index: job.index });
                     } else {
-                        let msg =
-                            "Brandjob mislukt — zie de libburn-meldingen hierboven".to_string();
+                        let msg = format!(
+                            "Brandjob op station {} mislukt — de drive meldt dat de \
+                             schrijfactie niet goed is verlopen. Controleer de media \
+                             (kwaliteit/kromming) en probeer eventueel een lagere \
+                             snelheid of andere schijf",
+                            job.index
+                        );
                         notify.log(Level::Error, &msg);
                         notify.send(Event::BurnFailed {
                             index: job.index,

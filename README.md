@@ -122,13 +122,20 @@ cargo build --release
   een **snelheden-combobox** gevuld met de snelheden uit de media-inspectie,
   en **eject-diagnostiek**: bij overschrijfbare media een settle-pauze vóór
   het eject-verzoek (achtergrondformattering) met logfeedback.
-- [ ] **Stap 9 — Afwerking**: favorieten/presets, meerdere stations tegelijk,
-  foutopsporing (libburn-meldingen zijn al gekoppeld via de msgs-queue).
-- [ ] **Stap 10 (geparkteerd tot na deze thread) — .deb-pakket**: Debian-package
-  met runtime-afhankelijkheden. NB: de GUI gebruikt direct **libburn4** en
-  **libisofs6**; **libisoburn1** wordt niet gebruikt (geen libisoburn-API in
-  de code) en is dus geen vereiste Depends. Build via `cargo deb` of
-  eigen `debian/`-regels.
+- [x] **Stap 9 — Afwerking (deels, rest verplaatst)**:
+  - **Sessielogbestand** (foutopsporing): elke sessie schrijft alle logregels
+    met volledige tijdstempel naar `~/.local/share/libburn_gui/logs/`;
+    knop “💾 Opslaan…” in het logpaneel.
+  - **Meerdere stations tegelijk**: de worker polt alle actieve jobs
+    niet-blokkerend; brand/wis/format op verschillende stations draait
+    parallel, elk met eigen voortgang/LED/annuleren. Lezen blijft globaal
+    sequentieel.
+  - Beperking gedocumenteerd in de UI: bij meerdere stations geldt dezelfde
+    bron (bestanden/ISO) en dezelfde instellingen voor gelijktijdige brands.
+  - Presets/favorieten: geschrapt (instellingen zijn al persistent).
+- [ ] **Stap 10 — Volgende thread**: i18n (typed tekstcatalogus + taalkeuze,
+  NL brontaal, EN/DE als vertaling), .deb-pakket (Depends: libburn4,
+  libisofs6 — libisoburn1 niet nodig), en kleine GUI-aanpassingen.
 
 ## Tests
 
