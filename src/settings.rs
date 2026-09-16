@@ -26,17 +26,27 @@ impl WriteMode {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum MultiSession {
-    Auto,
-    KeepOpen,
-    Close,
+    /// Schijf afsluiten na de brand (finalize) — de default.
+    #[serde(alias = "Auto", alias = "Close")]
+    No,
+    /// Schijf open laten voor extra sessies (alleen schrijf-eenmalige media).
+    #[serde(alias = "KeepOpen")]
+    Yes,
 }
 
 impl MultiSession {
     pub fn label(self) -> &'static str {
         match self {
-            MultiSession::Auto => "Auto (media wordt afgesloten)",
-            MultiSession::KeepOpen => "Open laten (multi-session)",
-            MultiSession::Close => "Afsluiten (finalize)",
+            MultiSession::No => "Nee — schijf wordt afgesloten",
+            MultiSession::Yes => "Ja — schijf blijft open (multi-session)",
+        }
+    }
+
+    /// Korte vorm voor logregels.
+    pub fn short(self) -> &'static str {
+        match self {
+            MultiSession::No => "nee",
+            MultiSession::Yes => "ja",
         }
     }
 }
@@ -77,7 +87,7 @@ impl Default for BurnSettings {
             speed_kbps: 0,
             write_mode: WriteMode::Auto,
             simulate: false,
-            multi_session: MultiSession::Auto,
+            multi_session: MultiSession::No,
             padding_kib: 0,
             overburn: false,
             underrun_proof: true,

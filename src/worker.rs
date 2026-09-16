@@ -192,7 +192,9 @@ pub enum Command {
         settings: BurnSettings,
     },
     /// Actieve job op een station annuleren (brand/wis/format).
-    CancelBurn { index: usize },
+    CancelBurn {
+        index: usize,
+    },
     Shutdown,
 }
 
@@ -259,12 +261,16 @@ pub enum Event {
         /// Verwachte resterende tijd in seconden (0 = onbekend).
         eta_secs: f64,
     },
-    BurnDone { index: usize },
+    BurnDone {
+        index: usize,
+    },
     BurnFailed {
         index: usize,
         error: String,
     },
-    BurnCancelled { index: usize },
+    BurnCancelled {
+        index: usize,
+    },
     /// Onderhoudsjob (stap 6): wissen of formatteren los van het branden.
     MaintStarted {
         kind: MaintKind,
@@ -1271,7 +1277,7 @@ fn burn_job(
         format!(
             "Instellingen: simulatie={}, multi-session={}, padding={} KiB, overburn={}",
             if s.simulate { "aan" } else { "uit" },
-            s.multi_session.label(),
+            s.multi_session.short(),
             s.padding_kib,
             if s.overburn { "aan" } else { "uit" }
         ),
@@ -1452,7 +1458,7 @@ fn burn_files_job(
             "Instellingen: simulatie={}, multi-session={}, padding={} KiB, \
              overburn={}, tijdstempels={}",
             if s.simulate { "aan" } else { "uit" },
-            s.multi_session.label(),
+            s.multi_session.short(),
             s.padding_kib,
             if s.overburn { "aan" } else { "uit" },
             if s.keep_timestamps {
@@ -1996,8 +2002,8 @@ unsafe fn make_write_opts(
         (raw.write_opts_set_perform_opc)(opts, 0);
         (raw.write_opts_set_simulate)(opts, s.simulate as c_int);
         let mut multi = match s.multi_session {
-            MultiSession::KeepOpen => 1,
-            _ => 0,
+            MultiSession::Yes => 1,
+            MultiSession::No => 0,
         };
         // Overwritbare media (DVD+RW, DVD-RAM, BD-RE, geformatteerde DVD-RW)
         // ondersteunt geen appendable-sessies — die media is inherent altijd
@@ -2165,8 +2171,7 @@ unsafe fn poll_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier) -> 
                 _ => ("Formatteren", DriveStatus::Formatting, MaintKind::Format),
             };
             if ds == busy && prog.sectors > 0 {
-                let pct =
-                    ((prog.sector as f32 / prog.sectors as f32) * 100.0).min(100.0) as i32;
+                let pct = ((prog.sector as f32 / prog.sectors as f32) * 100.0).min(100.0) as i32;
                 if Some(pct) != job.last_pct {
                     notify.log(Level::Info, format!("{label}… {pct}%"));
                     notify.send(Event::MaintProgress {
@@ -2271,9 +2276,7 @@ unsafe fn finalize_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier)
                                 "Station {}: brandjob klaar{} — media {}",
                                 job.index,
                                 if wj.s.simulate { " (simulatie)" } else { "" },
-                                if wj.s.multi_session
-                                    == crate::settings::MultiSession::KeepOpen
-                                {
+                                if wj.s.multi_session == crate::settings::MultiSession::Yes {
                                     "blijft appendable"
                                 } else {
                                     "is afgesloten"
@@ -2313,8 +2316,7 @@ unsafe fn finalize_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier)
                         index: job.index,
                     });
                 } else {
-                    let msg =
-                        "Wissen mislukt — zie de libburn-meldingen hierboven".to_string();
+                    let msg = "Wissen mislukt — zie de libburn-meldingen hierboven".to_string();
                     notify.log(Level::Error, &msg);
                     notify.send(Event::MaintFailed {
                         kind: MaintKind::Erase,

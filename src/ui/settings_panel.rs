@@ -60,18 +60,15 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App) {
             ui.checkbox(&mut s.underrun_proof, "Buffer-underrun-beveiliging");
 
             ui.add_space(4.0);
-            ui.label(egui::RichText::new("Multi-session").strong());
-            egui::ComboBox::from_id_salt("settings.multi_session")
-                .selected_text(s.multi_session.label())
-                .show_ui(ui, |ui| {
-                    for m in [
-                        MultiSession::Auto,
-                        MultiSession::KeepOpen,
-                        MultiSession::Close,
-                    ] {
-                        ui.selectable_value(&mut s.multi_session, m, m.label());
-                    }
-                });
+            ui.label(egui::RichText::new("Multi-session").strong())
+                .on_hover_text(
+                    "Ja: na de brand extra sessies toevoegen — alleen zinvol op \
+                 schrijf-eenmalige media (CD-R, DVD±R, BD-R). Overschrijfbare \
+                 media blijft altijd beschrijfbaar.",
+                );
+            for m in [MultiSession::No, MultiSession::Yes] {
+                ui.radio_value(&mut s.multi_session, m, m.label());
+            }
 
             ui.add_space(4.0);
             ui.horizontal(|ui| {
