@@ -308,10 +308,22 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
                 .as_ref()
                 .and_then(|mid| mid.book_type.clone())
                 .unwrap_or_else(|| "—".to_string());
-            let capacity_val = media
-                .read_capacity_blocks
-                .map(|b| format!("{} ({} blokken)", format_blocks(b), b))
-                .unwrap_or_else(|| "— (lege schijf)".to_string());
+            let capacity_val = match media.read_capacity_blocks {
+                // Lege overbeschrijfbare media (DVD+RW, BD-RE, …): de drive
+                // meldt de geformatteerde capaciteit, al staat er geen data op.
+                Some(b) if media.disc_status == DiscStatus::Blank => {
+                    format!("{} geformatteerd — nog leeg", format_blocks(b))
+                }
+                Some(b) => format!("{} ({} blokken)", format_blocks(b), b),
+                None => match media.disc_status {
+                    DiscStatus::Empty | DiscStatus::Unready => "geen schijf".to_string(),
+                    DiscStatus::Blank => "nog niets beschreven".to_string(),
+                    DiscStatus::Unsuitable => "onbruikbare media".to_string(),
+                    // Beschreven media zonder leesbare 2048-byte blokken:
+                    // typisch CD-audio (wordt nog niet ondersteund).
+                    _ => "geen leesbare data (bijv. CD-audio)".to_string(),
+                },
+            };
             let dm_val = if matches!(media.profile_no, 0x41 | 0x42 | 0x43) {
                 match media.bd_spare {
                     Some((alloc, free)) => {
@@ -339,11 +351,13 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
                     ui.label(book_val);
                     ui.end_row();
 
-                    ui.weak("Capaciteit (leesbaar):");
+                    ui.weak("Leesbaar:");
                     ui.label(capacity_val).on_hover_text(
-                        "Hoeveel data er leesbaar op de schijf staat. Op een lege \
-                         schrijf-eenmalige schijf is er niets te lezen ('-'); op \
-                         RW/RE-media meldt de drive de geformatteerde capaciteit.",
+                        "Wat via burn_read_data maximaal leesbaar is van deze schijf. \
+                         Op DVD/BD meldt de drive de volledige geformatteerde \
+                         capaciteit, ook als de schijf nog leeg is; op CD alleen \
+                         het beschreven gebied. Niet-datamedia (bijv. CD-audio) \
+                         is zo niet leesbaar.",
                     );
                     ui.weak("Defect mgmt:");
                     ui.label(dm_val);
@@ -490,7 +504,11 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
             }
             ui.horizontal(|ui| {
                 ui.label(format!("sector {} / {}", b.sector, b.sectors));
-                ui.label(format!("{:.0} kB/s", b.kbps));
+                ui.label(
+                    egui::RichText::new(format!("{:.0} kB/s", b.kbps))
+                        .strong()
+                        .color(colors::ORANGE),
+                );
                 ui.label(format!("buffer {:.0}%", b.buffer_pct));
                 ui.label(format!("fifo {:.0}%", b.fifo_pct));
                 if ui.button("⏹ Annuleren").clicked() {
@@ -715,7 +733,8 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
     }
     ui.weak(
         "Gebruikt de instellingen rechts: snelheid, schrijfmodus, simulatie, \
-         multi-session, padding, wissen vooraf.",
+         multi-session, padding. Wissen of formatteren gaat via Onderhoud \
+         in het Media-eiland.",
     );
 }
 

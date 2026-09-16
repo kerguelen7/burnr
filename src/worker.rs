@@ -391,6 +391,9 @@ struct ActiveJob {
     started: std::time::Instant,
     last_progress: std::time::Instant,
     last_pct: Option<i32>,
+    /// Laatst geziene payload-sector — basis voor de gemiddelde snelheid
+    /// die bij het afronden van de job in het log komt.
+    last_sector: i32,
     cancelled: bool,
 }
 
@@ -1383,6 +1386,7 @@ fn burn_job(
         started: std::time::Instant::now(),
         last_progress: std::time::Instant::now(),
         last_pct: Some(i32::MIN),
+        last_sector: 0,
         cancelled: false,
     });
 }
@@ -1893,6 +1897,7 @@ fn burn_files_job(
         started: std::time::Instant::now(),
         last_progress: std::time::Instant::now(),
         last_pct: Some(i32::MIN),
+        last_sector: 0,
         cancelled: false,
     });
 }
@@ -2123,6 +2128,11 @@ unsafe fn poll_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier) -> 
             return true;
         }
         if let Some(wj) = &job.write {
+            // Laatst bekende sector bijwerken (vóór de 200 ms-throttle),
+            // zodat finalize_job de gemiddelde snelheid kan berekenen.
+            if prog.sector > job.last_sector {
+                job.last_sector = prog.sector;
+            }
             // Write-job: voortgang tijdens de schrijf-fasen.
             if matches!(
                 ds,
@@ -2191,6 +2201,9 @@ unsafe fn poll_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier) -> 
 unsafe fn finalize_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier) {
     unsafe {
         let well = (st.raw.drive_wrote_well)(job.drive) == 1;
+        // Brandduur nu vastleggen: na de eject-reeks (met pauzes) zou de
+        // gemiddelde snelheid anders te laag uitvallen.
+        let burn_elapsed = job.started.elapsed().as_secs_f64();
         drain_msgs(&st.raw, notify);
 
         match &mut job.kind {
@@ -2283,6 +2296,31 @@ unsafe fn finalize_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier)
                                 }
                             ),
                         );
+                        // Samenvatting (komt automatisch ook in het
+                        // sessielogbestand): payload, duur, gemiddelde snelheid.
+                        if job.last_sector > 0 && burn_elapsed >= 1.0 {
+                            let kbps = (job.last_sector as f64 * 2048.0) / burn_elapsed / 1000.0;
+                            let secs = burn_elapsed as u64;
+                            let duur = if secs >= 3600 {
+                                format!(
+                                    "{}:{:02}:{:02}",
+                                    secs / 3600,
+                                    (secs % 3600) / 60,
+                                    secs % 60
+                                )
+                            } else {
+                                format!("{}:{:02}", secs / 60, secs % 60)
+                            };
+                            notify.log(
+                                Level::Info,
+                                format!(
+                                    "Station {}: {} in {duur} — gemiddeld {:.0} kB/s",
+                                    job.index,
+                                    format_blocks(job.last_sector),
+                                    kbps,
+                                ),
+                            );
+                        }
                         notify.send(Event::BurnDone { index: job.index });
                     } else {
                         let msg = format!(
@@ -2683,6 +2721,7 @@ fn erase_job(
         started: std::time::Instant::now(),
         last_progress: std::time::Instant::now(),
         last_pct: Some(i32::MIN),
+        last_sector: 0,
         cancelled: false,
     });
 }
@@ -2795,6 +2834,7 @@ fn format_job(
         started: std::time::Instant::now(),
         last_progress: std::time::Instant::now(),
         last_pct: Some(i32::MIN),
+        last_sector: 0,
         cancelled: false,
     });
 }

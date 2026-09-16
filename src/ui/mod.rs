@@ -15,4 +15,6 @@ pub mod colors {
     pub const BAD: Color32 = Color32::from_rgb(238, 112, 112);
     pub const DIM: Color32 = Color32::from_rgb(120, 128, 140);
     pub const ACCENT: Color32 = Color32::from_rgb(120, 170, 250);
+    /// Fel oranje voor nadruk (bijv. de brandsnelheid tijdens het branden).
+    pub const ORANGE: Color32 = Color32::from_rgb(255, 145, 30);
 }
