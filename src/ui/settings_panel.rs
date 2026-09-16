@@ -32,6 +32,15 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
 }
 
 fn burn_section(ui: &mut egui::Ui, app: &mut App) {
+    // Multi-session is alleen zinvol op schrijf-eenmalige media; op
+    // overschrijfbare media negeert de worker de vlag toch al. Zonder
+    // inspectie (geen media bekend) laten we de keuze gewoon actief.
+    let multi_applicable = app
+        .selected
+        .and_then(|i| app.drives.get(i))
+        .and_then(|d| d.media.as_ref())
+        .is_none_or(|m| !crate::worker::profile_is_overwritable(m.profile_no));
+
     egui::CollapsingHeader::new(egui::RichText::new("🔥 Branden").strong())
         .default_open(true)
         .show(ui, |ui| {
@@ -60,15 +69,28 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App) {
             ui.checkbox(&mut s.underrun_proof, "Buffer-underrun-beveiliging");
 
             ui.add_space(4.0);
-            ui.label(egui::RichText::new("Multi-session").strong())
-                .on_hover_text(
-                    "Ja: na de brand extra sessies toevoegen — alleen zinvol op \
-                 schrijf-eenmalige media (CD-R, DVD±R, BD-R). Overschrijfbare \
-                 media blijft altijd beschrijfbaar.",
-                );
-            for m in [MultiSession::No, MultiSession::Yes] {
-                ui.radio_value(&mut s.multi_session, m, m.label());
-            }
+            ui.add_enabled_ui(multi_applicable, |ui| {
+                ui.label(egui::RichText::new("Multi-session").strong())
+                    .on_hover_text(
+                        "Ja: na de brand extra sessies toevoegen — alleen zinvol op \
+                     schrijf-eenmalige media (CD-R, DVD±R, BD-R). Overschrijfbare \
+                     media blijft altijd beschrijfbaar.",
+                    );
+                for m in [MultiSession::No, MultiSession::Yes] {
+                    ui.radio_value(&mut s.multi_session, m, m.label());
+                }
+                if !multi_applicable {
+                    ui.label(
+                        egui::RichText::new(
+                            "Niet van toepassing: de media in het geselecteerde \
+                             station is overschrijfbaar en blijft altijd \
+                             beschrijfbaar.",
+                        )
+                        .small()
+                        .color(colors::DIM),
+                    );
+                }
+            });
 
             ui.add_space(4.0);
             ui.horizontal(|ui| {
