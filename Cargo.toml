@@ -7,6 +7,8 @@ description = "Moderne egui-interface rond de systeem-libburn (runtime geladen, 
 [dependencies]
 eframe = { version = "0.36.2", features = ["persistence"] }
 egui = "0.36.2"
+# Alleen voor het decoderen van het ingebedde venstericoon (assets/icon.png).
+image = { version = "0.25", default-features = false, features = ["png"] }
 libloading = "0.8"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 rfd = "0.17"

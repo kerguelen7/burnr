@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="100%" style="max-width: 100%;">
+  <defs>
+    
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2a2d37"/>
+      <stop offset="100%" stop-color="#14151b"/>
+    </linearGradient>
+    
+    <linearGradient id="discGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4a5162"/>
+      <stop offset="50%" stop-color="#2d323f"/>
+      <stop offset="100%" stop-color="#1a1c24"/>
+    </linearGradient>
+    
+    <linearGradient id="opticGleam" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00f2fe" stop-opacity="0.25"/>
+      <stop offset="50%" stop-color="#4facfe" stop-opacity="0.04"/>
+      <stop offset="100%" stop-color="#ff0844" stop-opacity="0.25"/>
+    </linearGradient>
+    
+    <linearGradient id="laserCoreGrad" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="25%" stop-color="#ffea00"/>
+      <stop offset="60%" stop-color="#ff5500"/>
+      <stop offset="100%" stop-color="#d00036"/>
+    </linearGradient>
+    
+    <linearGradient id="laserGlowGrad" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffea00" stop-opacity="0.6"/>
+      <stop offset="50%" stop-color="#ff3b00" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#d00036" stop-opacity="0"/>
+    </linearGradient>
+    
+    <radialGradient id="sparkGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="30%" stop-color="#ff7700" stop-opacity="0.8"/>
+      <stop offset="70%" stop-color="#ff0044" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#ff0044" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  
+  <rect x="8" y="12" width="112" height="112" rx="28" fill="#000000" opacity="0.35"/>
+  
+  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#bgGrad)"/>
+  
+  <rect x="8.5" y="8.5" width="111" height="111" rx="27.5" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="1"/>
+  
+  
+  <circle cx="64" cy="68" r="42" fill="#000000" opacity="0.3"/>
+  
+  <circle cx="64" cy="64" r="42" fill="url(#discGrad)"/>
+  <circle cx="64" cy="64" r="42" fill="url(#opticGleam)"/>
+  <circle cx="64" cy="64" r="41.5" fill="none" stroke="#ffffff" stroke-opacity="0.12" stroke-width="1"/>
+  
+  <circle cx="64" cy="64" r="36" fill="none" stroke="#ffffff" stroke-opacity="0.05" stroke-width="1"/>
+  <circle cx="64" cy="64" r="30" fill="none" stroke="#ffffff" stroke-opacity="0.06" stroke-width="5"/>
+  <circle cx="64" cy="64" r="23" fill="none" stroke="#ffffff" stroke-opacity="0.04" stroke-width="1"/>
+  
+  <circle cx="64" cy="64" r="16" fill="#14151b" stroke="#ffffff" stroke-opacity="0.1" stroke-width="1"/>
+  
+  <circle cx="64" cy="64" r="7.5" fill="#2a2d37"/>
+  
+  
+  <path d="M 64,34 A 30 30 0 0 1 72,93" fill="none" stroke="url(#laserCoreGrad)" stroke-width="8" stroke-linecap="round" opacity="0.25"/>
+  
+  <path d="M 64,34 A 30 30 0 0 1 72,93" fill="none" stroke="url(#laserCoreGrad)" stroke-width="2.5" stroke-linecap="round"/>
+  
+  <polygon points="101,14 114,24 77,98 66,89" fill="url(#laserGlowGrad)"/>
+  
+  <polygon points="104,16 111,23 75,95 69,91" fill="url(#laserCoreGrad)" opacity="0.95"/>
+  
+  
+  <circle cx="72" cy="93" r="10" fill="url(#sparkGlow)"/>
+  
+  <circle cx="72" cy="93" r="3.5" fill="#ffffff"/>
+  
+  <polygon points="72,85 73.5,91.5 80,93 73.5,94.5 72,101 70.5,94.5 64,93 70.5,91.5" fill="#ffffff" opacity="0.95"/>
+</svg>
