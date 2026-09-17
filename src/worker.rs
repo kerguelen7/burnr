@@ -317,7 +317,7 @@ impl MaintKind {
     pub fn label(self) -> &'static str {
         match self {
             MaintKind::Erase => "wissen",
-            MaintKind::Format => "formatteren",
+            MaintKind::Format => "herstellen",
         }
     }
 }
@@ -2183,7 +2183,7 @@ unsafe fn poll_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier) -> 
             // Onderhoudsjob: wissen/formatteren met percentage.
             let (label, busy, kind) = match job.kind {
                 JobKind::Erase => ("Wissen", DriveStatus::Erasing, MaintKind::Erase),
-                _ => ("Formatteren", DriveStatus::Formatting, MaintKind::Format),
+                _ => ("Herstelpoging", DriveStatus::Formatting, MaintKind::Format),
             };
             if ds == busy && prog.sectors > 0 {
                 let pct = ((prog.sector as f32 / prog.sectors as f32) * 100.0).min(100.0) as i32;
@@ -2372,25 +2372,27 @@ unsafe fn finalize_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier)
                 (st.raw.drive_re_assess)(job.drive, 0);
                 (st.raw.drive_release)(job.drive, 0);
                 if job.cancelled {
-                    notify.log(Level::Warning, "Formatteren geannuleerd");
+                    notify.log(Level::Warning, "Herstelpoging geannuleerd");
                     notify.send(Event::MaintCancelled {
                         kind: MaintKind::Format,
                         index: job.index,
                     });
                 } else if well {
-                    notify.log(Level::Success, "Media geformatteerd");
+                    notify.log(
+                        Level::Success,
+                        "Herstelpoging geslaagd — media opnieuw geformatteerd",
+                    );
                     notify.send(Event::MaintDone {
                         kind: MaintKind::Format,
                         index: job.index,
                     });
                 } else {
-                    let msg = "Formatteren mislukt — zie de libburn-meldingen \
-                               hierboven. Tips: probeer ‘Certificatie \
-                               overslaan (snelformat)’ aan, en eventueel \
-                               ‘Defect management uitschakelen’ uit (of \
-                               juist aan) — sommige drives weigeren BD-RE \
+                    let msg = "Herstelpoging mislukt — zie de libburn-meldingen \
+                               hierboven. Tips: wissel ‘Certificering \
+                               activeren’ en ‘Defect management activeren’ \
+                               eens uit — sommige drives weigeren BD-RE \
                                zonder spare-gebieden of met volledige \
-                               certificatie te formatteren"
+                               certificatie"
                         .to_string();
                     notify.log(Level::Error, &msg);
                     notify.send(Event::MaintFailed {
@@ -2700,7 +2702,7 @@ fn erase_job(
     if profile_is_overwritable(profile_no) {
         let msg = format!(
             "Media (profiel 0x{:02X}) is direct overschrijfbaar — wissen is niet \
-             nodig; gebruik “Formatteren” om de schijf te herstellen",
+             nodig; gebruik de “Herstelpoging” om de schijf te herstellen",
             profile_no
         );
         notify.log(Level::Error, &msg);
@@ -2839,14 +2841,14 @@ fn format_job(
     let Some(st) = state else {
         notify.log(
             Level::Warning,
-            "Formatteren aangevraagd, maar libburn is niet geladen",
+            "Herstelpoging aangevraagd, maar libburn is niet geladen",
         );
         return;
     };
     if st.infos.is_null() || index >= st.n_drives {
         notify.log(
             Level::Warning,
-            format!("Formatteren aangevraagd voor onbekend station {index}"),
+            format!("Herstelpoging aangevraagd voor onbekend station {index}"),
         );
         return;
     }
@@ -2855,7 +2857,7 @@ fn format_job(
         kind: MaintKind::Format,
         index,
     });
-    notify.log(Level::Info, "Media formatteren (standaardgrootte)…");
+    notify.log(Level::Info, "Herstelpoging: standaardgrootte…");
 
     // Diagnostiek: SCSI-commandolog voor deze job — elk commando + sense
     // komt in /tmp/libburn_sg_command_log. Onmisbaar bij format-problemen,
@@ -2896,7 +2898,7 @@ fn format_job(
     let _ = unsafe { (st.raw.disc_get_profile)(di.drive, &mut profile_no, pname.as_mut_ptr()) };
     if !profile_is_formattable(profile_no) {
         let msg = format!(
-            "Formatteren is niet van toepassing op deze media (profiel 0x{:02X}) \
+            "Herstelpoging is niet van toepassing op deze media (profiel 0x{:02X}) \
              — voor CD-RW/DVD-RW sequentieel is “Wissen” de juiste actie",
             profile_no
         );
@@ -2932,9 +2934,8 @@ fn format_job(
         fmt_flag |= 1 << 5;
         notify.log(
             Level::Info,
-            "Defect management wordt bij dit format geprobeerd uit te \
-             schakelen — sneller branden, maar slechte blokken worden niet \
-             meer hermapd",
+            "Defect management wordt bij deze herstelpoging uitgeschakeld — \
+             sneller branden, maar slechte blokken worden niet meer hermapd",
         );
     }
     if s.format_skip_certification {
@@ -2950,8 +2951,8 @@ fn format_job(
     }
     notify.log(
         Level::Info,
-        "Volledige format — bestaande data wordt gewist; dit kan enkele \
-         minuten duren…",
+        "Herstelpoging: de media wordt opnieuw geformatteerd; dit kan \
+         enkele minuten duren…",
     );
     unsafe { (st.raw.disc_format)(di.drive, 0, fmt_flag) };
     let adr = unsafe { adr_of(&di, &st.raw) };
@@ -3320,7 +3321,7 @@ pub fn drive_status_label(s: DriveStatus) -> &'static str {
         DriveStatus::WritingPregap => "pregap schrijven",
         DriveStatus::ClosingTrack => "track afsluiten",
         DriveStatus::ClosingSession => "sessie afsluiten",
-        DriveStatus::Formatting => "formatteren",
+        DriveStatus::Formatting => "herstelpoging",
         DriveStatus::ReadingSync => "synchroon lezen",
         DriveStatus::WritingSync => "synchroon schrijven",
         DriveStatus::Other(_) => "onbekend",

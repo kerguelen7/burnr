@@ -733,12 +733,12 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
     }
     ui.weak(
         "Gebruikt de instellingen rechts: snelheid, schrijfmodus, simulatie, \
-         multi-session, padding. Wissen of formatteren gaat via Onderhoud \
-         in het Media-eiland.",
+         multi-session, padding. Wissen en de herstelpoging gaan via \
+         Onderhoud in het Media-eiland.",
     );
 }
 
-/// Onderhoud-sectie (stap 6): losse wis- en format-acties op de media.
+/// Onderhoud-sectie (stap 6): losse wis-acties plus de herstelpoging (format).
 fn maint_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
     use crate::worker::{profile_is_formattable, profile_is_overwritable, profile_is_rewritable};
 
@@ -780,8 +780,9 @@ fn maint_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry
         && !app.job_active_on(d.index);
 
     // Wissen: alleen zinvol op herbeschrijfbare media die niet direct
-    // overschrijfbaar is (CD-RW, DVD-RW sequentieel). Voor overschrijfbare
-    // media (DVD+RW, DVD-RAM, BD-RE) is formatteren de juiste actie.
+    // overschrijfbaar is (CD-RW, DVD-RW sequentieel). Overschrijfbare media
+    // (DVD+RW, DVD-RAM, BD-RE) is direct beschrijfbaar — wissen is er niet
+    // van toepassing; een herstelpoging is er optioneel.
     let can_erase = ready && rewritable && !overwritable;
 
     ui.horizontal(|ui| {
@@ -797,51 +798,74 @@ fn maint_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry
         {
             app.request_erase(d.index, false);
         }
-        if ui
-            .add_enabled(ready && formattable, egui::Button::new("⚙ Formatteren"))
-            .on_hover_text(
-                "Volledige format: wist alle data op de schijf en herstelt de \
-                 format-structuren. Kan enkele minuten of langer duren.",
-            )
-            .clicked()
-        {
-            app.request_format(d.index);
-        }
     });
 
-    // Format-opties (stap 8 + diagnostiek 2026): alleen relevant voor media
-    // met defect management / certificatie (BD, DVD-RAM).
-    if formattable && matches!(profile, 0x12 | 0x41 | 0x42 | 0x43) {
-        ui.checkbox(
-            &mut app.settings.disable_dm_on_format,
-            "Defect management uitschakelen",
+    // Herstelpoging (voorheen "formatteren"): een reddingsactie voor media
+    // in een verkeerde toestand. De uitkomst is drive-afhankelijk, daarom
+    // achter een uitklapblok en expliciet als poging geformuleerd.
+    if formattable {
+        ui.add_space(4.0);
+        egui::CollapsingHeader::new(
+            egui::RichText::new("🛠 Herstelpoging voor deze media (gevorderd)").small(),
         )
-        .on_hover_text(
-            "Bij het formatteren: geen spare-gebieden en geen hermapping van \
-             slechte blokken. Branden gaat daarna een stuk sneller — gebruik \
-             dit alleen op betrouwbare media.",
-        );
-        ui.checkbox(
-            &mut app.settings.format_skip_certification,
-            "Certificatie overslaan (snelformat)",
-        )
-        .on_hover_text(
-            "Bij het formatteren: geen certificatie — de drive controleert \
-             het oppervlak niet vooraf. Redding voor drives die afhaken op \
-             volledige certificatie (‘Format command failed’); controle \
-             gebeurt daarna alsnog via defect management tijdens het \
-             branden. Ook aanzetten als het gewone format mislukt.",
-        );
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.weak(
+                "Probeert de media opnieuw te formatteren (MMC FORMAT UNIT) — \
+                 bedoeld als redding voor schijven in een verkeerde toestand. \
+                 De uitkomst hangt af van drive en firmware; een mislukte \
+                 poging is risicoloos voor de data, maar kan de schijf \
+                 tijdelijk onleesbaar maken (power-cycle van de drive helpt \
+                 meestal).",
+            );
+            ui.add_space(2.0);
+            if ui
+                .add_enabled(ready, egui::Button::new("🛠 Herstelpoging starten"))
+                .clicked()
+            {
+                app.request_format(d.index);
+            }
+            ui.add_space(2.0);
+            ui.weak("Opties:");
+
+            // Positieve formulering: de schakelaar toont of het mechanisme
+            // AAN staat; de instellingen slaan de uitschakel-vlaggen op.
+            let mut dm_actief = !app.settings.disable_dm_on_format;
+            ui.horizontal(|ui| {
+                crate::ui::toggle_switch(ui, &mut dm_actief);
+                ui.label("Defect management activeren").on_hover_text(
+                    "Aan: de drive reserveert bij de herstelpoging \
+                     spare-gebieden en hermapt slechte blokken (aanbevolen). \
+                     Uit: sneller branden, geen hermapping — alleen op \
+                     betrouwbare media.",
+                );
+            });
+            app.settings.disable_dm_on_format = !dm_actief;
+
+            let mut cert_actief = !app.settings.format_skip_certification;
+            ui.horizontal(|ui| {
+                crate::ui::toggle_switch(ui, &mut cert_actief);
+                ui.label("Certificering activeren").on_hover_text(
+                    "Aan: de drive controleert bij de herstelpoging het hele \
+                     oppervlak — grondig en traag, en bij sommige drives de \
+                     reden dat de poging faalt. Uit: snelformat; de controle \
+                     gebeurt daarna alsnog tijdens het branden.",
+                );
+            });
+            app.settings.format_skip_certification = !cert_actief;
+        });
     }
     if overwritable {
         ui.weak(
-            "Direct overschrijfbare media hoeft niet gewist of geformatteerd \
-             te worden — direct beschrijven volstaat. Let op: sommige \
-             drives weigeren her-formatteren; na een mislukte poging is de \
-             schijf na een power-cycle gewoon weer leesbaar.",
+            "Direct overschrijfbare media hoeft niet gewist te worden — \
+             direct beschrijven volstaat. Een herstelpoging (hierboven) is \
+             alleen nodig in bijzondere gevallen.",
         );
     } else if !rewritable && !formattable {
-        ui.weak("Deze media is niet herbeschrijfbaar — wissen/formatteren is niet mogelijk.");
+        ui.weak(
+            "Deze media is niet herbeschrijfbaar — wissen of een \
+             herstelpoging is niet mogelijk.",
+        );
     }
 }
 

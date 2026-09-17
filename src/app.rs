@@ -281,10 +281,7 @@ impl App {
     }
 
     pub fn request_inspect(&mut self, index: usize) {
-        if self.busy_drive.is_some()
-            || self.active_read.is_some()
-            || self.job_active_on(index)
-        {
+        if self.busy_drive.is_some() || self.active_read.is_some() || self.job_active_on(index) {
             return;
         }
         self.log.push(
@@ -418,7 +415,7 @@ impl App {
             return;
         }
         self.log
-            .push(Level::Info, "Formatteren aangevraagd".to_string());
+            .push(Level::Info, "Herstelpoging aangevraagd".to_string());
         self.send(Command::FormatDisc {
             index,
             settings: self.settings.clone(),
@@ -670,11 +667,7 @@ impl App {
                 elapsed_secs,
                 eta_secs,
             } => {
-                if let Some(b) = self
-                    .active_burns
-                    .iter_mut()
-                    .find(|b| b.index == index)
-                {
+                if let Some(b) = self.active_burns.iter_mut().find(|b| b.index == index) {
                     b.sector = sector;
                     b.sectors = sectors;
                     b.kbps = kbps;
@@ -717,7 +710,11 @@ impl App {
             Event::MaintStarted { kind, index } => {
                 self.active_maints
                     .retain(|m| !(m.kind == kind && m.index == index));
-                self.active_maints.push(MaintJob { kind, index, pct: 0.0 });
+                self.active_maints.push(MaintJob {
+                    kind,
+                    index,
+                    pct: 0.0,
+                });
             }
             Event::MaintProgress { kind, index, pct } => {
                 if let Some(m) = self
