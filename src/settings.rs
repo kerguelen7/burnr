@@ -78,6 +78,11 @@ pub struct BurnSettings {
     /// Bij formatteren van BD/DVD-RAM: defect management proberen uit te
     /// schakelen (sneller branden, geen hermapping van slechte blokken).
     pub disable_dm_on_format: bool,
+    /// Bij formatteren: certificatie overslaan (libburn flag bit6). Kiest
+    /// format-type 0x00 zonder certificatie — de redding voor drives die
+    /// afhaken op volledige certificatie (bijv. 3/31/01 Format command
+    /// failed).
+    pub format_skip_certification: bool,
 }
 
 impl Default for BurnSettings {
@@ -94,6 +99,7 @@ impl Default for BurnSettings {
             eject_after: true,
             keep_timestamps: true,
             disable_dm_on_format: false,
+            format_skip_certification: false,
         }
     }
 }

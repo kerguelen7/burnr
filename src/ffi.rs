@@ -326,7 +326,26 @@ pub struct RawLibburn {
     pub disc_write: unsafe extern "C" fn(*mut BurnWriteOpts, *mut BurnDisc),
     pub disc_erase: unsafe extern "C" fn(*mut BurnDrive, c_int),
     pub disc_format: unsafe extern "C" fn(*mut BurnDrive, c_longlong, c_int),
+    /// `burn_disc_get_formats`: status + huidige grootte + aantal descriptors.
+    pub disc_get_formats: unsafe extern "C" fn(
+        *mut BurnDrive,
+        *mut c_int,
+        *mut c_longlong,
+        *mut c_uint,
+        *mut c_int,
+    ) -> c_int,
+    /// `burn_disc_get_format_descr`: één format-descriptor (type, grootte, tdp).
+    pub disc_get_format_descr: unsafe extern "C" fn(
+        *mut BurnDrive,
+        c_int,
+        *mut c_int,
+        *mut c_longlong,
+        *mut c_uint,
+    ) -> c_int,
     pub drive_cancel: unsafe extern "C" fn(*mut BurnDrive),
+    /// `burn_set_scsi_logging`: bit0=log naar /tmp/libburn_sg_command_log,
+    /// bit1=stderr, bit2=flush per regel.
+    pub set_scsi_logging: unsafe extern "C" fn(c_int),
     pub drive_wrote_well: unsafe extern "C" fn(*mut BurnDrive) -> c_int,
     pub drive_re_assess: unsafe extern "C" fn(*mut BurnDrive, c_int) -> c_int,
     pub drive_set_speed: unsafe extern "C" fn(*mut BurnDrive, c_int, c_int),
@@ -645,11 +664,35 @@ impl RawLibburn {
                 "burn_disc_format",
                 unsafe extern "C" fn(*mut BurnDrive, c_longlong, c_int)
             );
+            let disc_get_formats = resolve!(
+                lib,
+                "burn_disc_get_formats",
+                unsafe extern "C" fn(
+                    *mut BurnDrive,
+                    *mut c_int,
+                    *mut c_longlong,
+                    *mut c_uint,
+                    *mut c_int,
+                ) -> c_int
+            );
+            let disc_get_format_descr = resolve!(
+                lib,
+                "burn_disc_get_format_descr",
+                unsafe extern "C" fn(
+                    *mut BurnDrive,
+                    c_int,
+                    *mut c_int,
+                    *mut c_longlong,
+                    *mut c_uint,
+                ) -> c_int
+            );
             let drive_cancel = resolve!(
                 lib,
                 "burn_drive_cancel",
                 unsafe extern "C" fn(*mut BurnDrive)
             );
+            let set_scsi_logging =
+                resolve!(lib, "burn_set_scsi_logging", unsafe extern "C" fn(c_int));
             let drive_wrote_well = resolve!(
                 lib,
                 "burn_drive_wrote_well",
@@ -774,7 +817,10 @@ impl RawLibburn {
                 disc_write,
                 disc_erase,
                 disc_format,
+                disc_get_formats,
+                disc_get_format_descr,
                 drive_cancel,
+                set_scsi_logging,
                 drive_wrote_well,
                 drive_re_assess,
                 drive_set_speed,

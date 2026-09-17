@@ -602,10 +602,13 @@ fn load_library(
                 // exclusief (O_EXCL) of niet — uitzetten als de bestandsbeheerder
                 // de schijf heeft aangekoppeld (automount).
                 (raw.preset_device_open)(if exclusive { 1 } else { 0 }, 0, 0);
-                // libburn-meldingen: alles vanaf UPDATE in de queue, niets
+                // libburn-meldingen: vanaf DEBUG in de queue, niets
                 // rechtstreeks naar stderr; de worker haalt de queue leeg.
+                // DEBUG is bewust inbegrepen: SCSI-error-condities op losse
+                // commando's meldt libburn alleen als DEBUG — zonder deze
+                // drempel blijven format-/wis-fouten onzichtbaar.
                 (raw.msgs_set_severities)(
-                    c"UPDATE".as_ptr(),
+                    c"DEBUG".as_ptr(),
                     c"NEVER".as_ptr(),
                     c"libburn_gui: ".as_ptr(),
                 );
@@ -892,9 +895,11 @@ fn inspect(state: Option<&WorkerState>, index: usize, notify: &Notifier) {
     }
 
     // Leesbare capaciteit (kan falen op lege media — geen probleem).
+    // Let op: libburn meldt na een mislukte READ CAPACITY nog "1 blok"
+    // als succes (quirk in burn_get_read_capacity_v2); daarom > 1.
     let mut capacity: c_int = 0;
     let read_capacity =
-        if unsafe { (st.raw.get_read_capacity)(di.drive, &mut capacity, 0) } == 1 && capacity > 0 {
+        if unsafe { (st.raw.get_read_capacity)(di.drive, &mut capacity, 0) } == 1 && capacity > 1 {
             Some(capacity)
         } else {
             None
@@ -2380,7 +2385,12 @@ unsafe fn finalize_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier)
                     });
                 } else {
                     let msg = "Formatteren mislukt — zie de libburn-meldingen \
-                               hierboven"
+                               hierboven. Tips: probeer ‘Certificatie \
+                               overslaan (snelformat)’ aan, en eventueel \
+                               ‘Defect management uitschakelen’ uit (of \
+                               juist aan) — sommige drives weigeren BD-RE \
+                               zonder spare-gebieden of met volledige \
+                               certificatie te formatteren"
                         .to_string();
                     notify.log(Level::Error, &msg);
                     notify.send(Event::MaintFailed {
@@ -2390,6 +2400,12 @@ unsafe fn finalize_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier)
                     });
                 }
             }
+        }
+
+        // Onderhoudsdiagnostiek weer uit (staat alleen aan tijdens
+        // wis/format-jobs; voor brandjobs is de log te omvangrijk).
+        if !matches!(&job.kind, JobKind::Write { .. }) {
+            (st.raw.set_scsi_logging)(0);
         }
     }
 }
@@ -2732,6 +2748,86 @@ pub fn profile_is_formattable(pno: i32) -> bool {
     matches!(pno, 0x12 | 0x13 | 0x14 | 0x1A | 0x43)
 }
 
+/// Naam van een MMC-format-type (mmc5r03c 6.5.4.2).
+fn format_type_name(ty: c_int) -> &'static str {
+    match ty {
+        0x00 => "volledig",
+        0x01 => "spare-uitbreiding",
+        0x10 => "DVD-RW volledig",
+        0x13 => "DVD-RW groei",
+        0x15 => "DVD-RW snel",
+        0x26 => "DVD+RW",
+        0x30 => "BD-RE met DM",
+        0x31 => "BD-RE zonder DM",
+        0x32 => "BD-R SRM",
+        _ => "?",
+    }
+}
+
+/// Logt de format-capaciteiten van de ingelegde media (diagnostiek) en geeft
+/// de aangeboden format-types terug.
+fn format_descriptor_types(st: &WorkerState, di: &ffi::DriveInfo, notify: &Notifier) -> Vec<c_int> {
+    unsafe {
+        let mut status: c_int = 0;
+        let mut size: c_longlong = 0;
+        let mut bl_sas: c_uint = 0;
+        let mut num: c_int = 0;
+        let ok =
+            (st.raw.disc_get_formats)(di.drive, &mut status, &mut size, &mut bl_sas, &mut num) == 1;
+        if !ok {
+            notify.log(
+                Level::Info,
+                "Format-capaciteiten: drive meldt geen leesbare format-info",
+            );
+            return Vec::new();
+        }
+        let status_txt = match status {
+            1 => "ongeformatteerd",
+            2 => "geformatteerd",
+            3 => "onbekende format-status",
+            _ => "?",
+        };
+        let mut types = Vec::new();
+        let mut list = String::new();
+        for i in 0..num {
+            let mut ty: c_int = 0;
+            let mut dsz: c_longlong = 0;
+            let mut tdp: c_uint = 0;
+            if (st.raw.disc_get_format_descr)(di.drive, i, &mut ty, &mut dsz, &mut tdp) == 1 {
+                types.push(ty);
+                if !list.is_empty() {
+                    list.push_str(", ");
+                }
+                list.push_str(&format!(
+                    "0x{:02X} {} ({})",
+                    ty,
+                    format_type_name(ty),
+                    format_blocks((dsz / 2048) as i32)
+                ));
+            }
+        }
+        let cur = if size > 0 {
+            format!(" ({})", format_blocks((size / 2048) as i32))
+        } else {
+            String::new()
+        };
+        notify.log(
+            Level::Info,
+            format!(
+                "Format-capaciteiten: {}{}, aangeboden: {}",
+                status_txt,
+                cur,
+                if list.is_empty() {
+                    "geen".to_string()
+                } else {
+                    list
+                }
+            ),
+        );
+        types
+    }
+}
+
 /// Formatteer de media los van een brandjob (stap 6).
 fn format_job(
     state: &Option<WorkerState>,
@@ -2760,6 +2856,18 @@ fn format_job(
         index,
     });
     notify.log(Level::Info, "Media formatteren (standaardgrootte)…");
+
+    // Diagnostiek: SCSI-commandolog voor deze job — elk commando + sense
+    // komt in /tmp/libburn_sg_command_log. Onmisbaar bij format-problemen,
+    // want niet elk faalpad van libburn levert een zichtbare melding.
+    // (Randgeval: bij parallelle onderhoudsjobs zet de eerst afgeronde job
+    // de log al uit; dan herstart de volgende job hem bij de volgende grab
+    // niet meer — acceptabel voor diagnostiek.)
+    unsafe { (st.raw.set_scsi_logging)(1 | 4) };
+    notify.log(
+        Level::Info,
+        "SCSI-commandolog aan: /tmp/libburn_sg_command_log",
+    );
 
     let grabbed = unsafe { (st.raw.drive_grab)(di.drive, 0) } == 1;
     if !grabbed {
@@ -2802,6 +2910,17 @@ fn format_job(
         return;
     }
 
+    // Diagnostiek: welke format-types biedt de drive voor deze media aan?
+    let fmt_types = format_descriptor_types(st, &di, notify);
+    if s.disable_dm_on_format && profile_no == 0x43 && !fmt_types.contains(&0x31) {
+        notify.log(
+            Level::Warning,
+            "De drive biedt geen format-type 0x31 (BD-RE zonder defect \
+             management) aan — libburn weigert dit format dan; zet \
+             ‘Defect management uitschakelen’ uit",
+        );
+    }
+
     // Volledige format met enforce-re-format (bit4): bij DVD+RW/BD-RE/DVD-RAM
     // ziet libburn een al geformatteerde schijf anders als no-op
     // ("FORMAT UNIT ignored. Already completed."). Bit4 forceert de "de-ice"
@@ -2816,6 +2935,17 @@ fn format_job(
             "Defect management wordt bij dit format geprobeerd uit te \
              schakelen — sneller branden, maar slechte blokken worden niet \
              meer hermapd",
+        );
+    }
+    if s.format_skip_certification {
+        // Bit6: libburn kiest dan format-type 0x00 zonder certificatie —
+        // de omweg waarmee dvd+rw-format vergelijkbare drives wél laat
+        // formatteren.
+        fmt_flag |= 1 << 6;
+        notify.log(
+            Level::Info,
+            "Certificatie wordt overgeslagen — libburn kiest format-type \
+             0x00 zonder certificatie (snelformat)",
         );
     }
     notify.log(

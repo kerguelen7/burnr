@@ -58,6 +58,7 @@ cargo build --release
 | `src/logger.rs` | feedback-log met niveaus en tijdstempels |
 | `src/settings.rs` | gebruikersinstellingen (worden in de brand-stap aan libburn gekoppeld) |
 | `src/ui/` | panelen: bovenbalk, stations, details, instellingen, log |
+| `assets/` | venstericoon: `icon.png` (ingebed in de binary, geladen in `main.rs`) en `icon.svg` (bron voor de latere .deb-installatie) |
 | `docs/libburn.h` | referentie-header (libburn 1.5.6) waar de FFI-layout van is afgeleid |
 
 ## Stappenplan

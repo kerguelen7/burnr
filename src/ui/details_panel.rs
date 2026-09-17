@@ -247,7 +247,7 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
                     app.request_inspect(d.index);
                 }
                 if !scan_ready {
-                    ui.weak("(eerst een scan uitvoeren)");
+                    ui.weak("(wacht op de stationscan)");
                 }
             }
         });
@@ -809,8 +809,8 @@ fn maint_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry
         }
     });
 
-    // Defect management uitschakelen bij het formatteren (stap 8) — alleen
-    // relevant voor media met DM (BD, DVD-RAM).
+    // Format-opties (stap 8 + diagnostiek 2026): alleen relevant voor media
+    // met defect management / certificatie (BD, DVD-RAM).
     if formattable && matches!(profile, 0x12 | 0x41 | 0x42 | 0x43) {
         ui.checkbox(
             &mut app.settings.disable_dm_on_format,
@@ -821,11 +821,25 @@ fn maint_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry
              slechte blokken. Branden gaat daarna een stuk sneller — gebruik \
              dit alleen op betrouwbare media.",
         );
+        ui.checkbox(
+            &mut app.settings.format_skip_certification,
+            "Certificatie overslaan (snelformat)",
+        )
+        .on_hover_text(
+            "Bij het formatteren: geen certificatie — de drive controleert \
+             het oppervlak niet vooraf. Redding voor drives die afhaken op \
+             volledige certificatie (‘Format command failed’); controle \
+             gebeurt daarna alsnog via defect management tijdens het \
+             branden. Ook aanzetten als het gewone format mislukt.",
+        );
     }
-    if !ready {
-        ui.weak("(eerst een scan uitvoeren)");
-    } else if overwritable {
-        ui.weak("Direct overschrijfbare media hoeft niet gewist te worden — formatteren herstelt de schijf.");
+    if overwritable {
+        ui.weak(
+            "Direct overschrijfbare media hoeft niet gewist of geformatteerd \
+             te worden — direct beschrijven volstaat. Let op: sommige \
+             drives weigeren her-formatteren; na een mislukte poging is de \
+             schijf na een power-cycle gewoon weer leesbaar.",
+        );
     } else if !rewritable && !formattable {
         ui.weak("Deze media is niet herbeschrijfbaar — wissen/formatteren is niet mogelijk.");
     }
