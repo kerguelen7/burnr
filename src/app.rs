@@ -256,7 +256,7 @@ impl App {
 
         app.log.push(
             Level::Info,
-            "LibBurn GUI gestart — libburn wordt van het systeem geladen…".to_string(),
+            "Burnr gestart — libburn wordt van het systeem geladen…".to_string(),
         );
         app.send(Command::LoadLibrary {
             path: None,
@@ -794,7 +794,7 @@ impl eframe::App for App {
 }
 
 /// Pad van het sessielogbestand (stap 9a): `$XDG_DATA_HOME` of
-/// `$HOME/.local/share` + `/libburn_gui/logs/sessie-<tijdstempel>.log`.
+/// `$HOME/.local/share` + `/burnr/logs/sessie-<tijdstempel>.log`.
 fn session_log_file() -> Option<std::path::PathBuf> {
     let base = std::env::var("XDG_DATA_HOME")
         .ok()
@@ -809,7 +809,7 @@ fn session_log_file() -> Option<std::path::PathBuf> {
         .to_string();
     Some(
         std::path::PathBuf::from(base)
-            .join("libburn_gui")
+            .join("burnr")
             .join("logs")
             .join(ts),
     )

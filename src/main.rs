@@ -1,4 +1,4 @@
-//! LibBurn GUI — een moderne egui-interface rond de systeem-libburn.
+//! Burnr — een lichte egui-interface rond de systeem-libburn.
 //!
 //! libburn wordt tijdens runtime geladen (`libburn.so.4`), niet meegecompileerd.
 
@@ -18,14 +18,14 @@ fn main() -> eframe::Result<()> {
             .with_inner_size([1180.0, 760.0])
             .with_min_inner_size([940.0, 600.0])
             // Wayland: koppelt het venster aan de toekomstige
-            // libburn_gui.desktop (icoon in de dock/taskbar).
-            .with_app_id("libburn_gui")
+            // burnr.desktop (icoon in de dock/taskbar).
+            .with_app_id("burnr")
             .with_icon(load_icon()),
         ..Default::default()
     };
 
     eframe::run_native(
-        "LibBurn GUI",
+        "Burnr",
         options,
         Box::new(|cc| Ok(Box::new(app::App::new(cc)))),
     )

@@ -1,8 +1,8 @@
 [package]
-name = "libburn_gui"
+name = "burnr"
 version = "0.1.0"
 edition = "2024"
-description = "Moderne egui-interface rond de systeem-libburn (runtime geladen, niet meegecompileerd)"
+description = "A lightweight libburn GUI for optical discs (runtime-loaded, not compiled in)"
 
 [dependencies]
 eframe = { version = "0.36.2", features = ["persistence"] }

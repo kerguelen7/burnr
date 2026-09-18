@@ -7,7 +7,8 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
     egui::Panel::top("top_bar").show(ui, |ui| {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.heading("💿 LibBurn GUI");
+            ui.heading("💿 Burnr");
+            ui.small(egui::RichText::new("A lightweight libburn GUI for optical discs").weak());
             ui.separator();
 
             match &app.lib_state {

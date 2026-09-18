@@ -1,4 +1,4 @@
-# LibBurn GUI
+# Burnr — A lightweight libburn GUI for optical discs
 
 A modern egui front-end for [libburn](https://libburnia-project.org/) — the
 CD/DVD/BD burning library. The project is built **step by step**; every step
@@ -31,7 +31,7 @@ libburn shared object and reload.
 
 ```sh
 cargo build --release
-./target/release/libburn_gui
+./target/release/burnr
 ```
 
 ## Features
@@ -54,7 +54,7 @@ cargo build --release
   usually fixes that). Options: defect management on/off, certification
   on/off.
 - Multiple drives in parallel with per-drive progress, LED and cancel
-- Session log file for troubleshooting (`~/.local/share/libburn_gui/logs/`)
+- Session log file for troubleshooting (`~/.local/share/burnr/logs/`)
 - Persistent settings (eframe persistence)
 
 ## Known limitations
@@ -156,7 +156,7 @@ cargo build --release
   request (background formatting) with log feedback.
 - [x] **Step 9 — Finishing touches (partial, rest moved)**:
   - **Session log file** (troubleshooting): every session writes all log
-    lines with full timestamp to `~/.local/share/libburn_gui/logs/`;
+    lines with full timestamp to `~/.local/share/burnr/logs/`;
     button "💾 Save…" in the log panel.
   - **Multiple drives at once**: the worker polls all active jobs
     non-blocking; burn/erase/format on different drives runs in parallel,
@@ -176,7 +176,7 @@ cargo build --release
   - Average speed logged after a successful burn (also in the session log
     file).
   - Window icon (`assets/icon.png` embedded via `include_bytes!`) and
-    Wayland app id (`libburn_gui`) for the future .desktop integration.
+    Wayland app id (`burnr`) for the future .desktop integration.
   - libburn message queue threshold lowered to DEBUG so SCSI error
     conditions on individual commands become visible in the log.
   - Format diagnostics: format capabilities are logged before every format
@@ -200,7 +200,7 @@ cargo build --release
   `docs/i18n-glossary.md`), rudimentary in-app help/info and README fully
   in en-US, then the .deb package (Depends: libburn4, libisofs6 —
   libisoburn1 not needed; check the t64 suffix on Debian trixie). The
-  .desktop file must be named exactly `libburn_gui.desktop` to match the
+  .desktop file must be named exactly `burnr.desktop` to match the
   Wayland app id.
 
 ## Tests

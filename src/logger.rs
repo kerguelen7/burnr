@@ -68,7 +68,7 @@ impl LogStore {
         let mut file = File::create(&path)?;
         writeln!(
             file,
-            "LibBurn GUI sessielog — gestart {}",
+            "Burnr sessielog — gestart {}",
             Local::now().format("%Y-%m-%d %H:%M:%S")
         )?;
         file.flush()?;

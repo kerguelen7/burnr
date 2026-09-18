@@ -27,7 +27,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                         .clicked()
                     {
                         if let Some(p) = rfd::FileDialog::new()
-                            .set_file_name("libburn_gui-log.txt")
+                            .set_file_name("burnr-log.txt")
                             .save_file()
                         {
                             match std::fs::File::create(&p) {

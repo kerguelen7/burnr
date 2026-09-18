@@ -378,7 +378,7 @@ pub(crate) mod tests {
             assert_eq!((iso.init)(), ISO_SUCCESS);
 
             // Temp-map met: 1 bestand van 1 MiB + submap met een bestand.
-            let tmp = std::env::temp_dir().join("libburn_gui_dirrec_test");
+            let tmp = std::env::temp_dir().join("burnr_dirrec_test");
             let _ = std::fs::remove_dir_all(&tmp);
             let sub = tmp.join("submap");
             std::fs::create_dir_all(&sub).unwrap();

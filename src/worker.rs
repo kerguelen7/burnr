@@ -610,7 +610,7 @@ fn load_library(
                 (raw.msgs_set_severities)(
                     c"DEBUG".as_ptr(),
                     c"NEVER".as_ptr(),
-                    c"libburn_gui: ".as_ptr(),
+                    c"burnr: ".as_ptr(),
                 );
                 notify.log(
                     Level::Info,
