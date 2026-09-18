@@ -7,7 +7,10 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
     egui::Panel::top("top_bar").show(ui, |ui| {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.heading("💿 Burnr");
+            if let Some(icon) = &app.icon {
+                ui.add(egui::Image::new(icon).fit_to_exact_size(egui::vec2(20.0, 20.0)));
+            }
+            ui.heading("Burnr");
             ui.small(egui::RichText::new("A lightweight libburn GUI for optical discs").weak());
             ui.separator();
 

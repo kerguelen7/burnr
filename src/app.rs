@@ -171,6 +171,8 @@ pub struct App {
     pub custom_so: String,
     pub log_filter: [bool; 4],
     pub auto_scroll: bool,
+    /// App-icoon als egui-texture voor de top bar (één keer gedecodeerd).
+    pub icon: Option<egui::TextureHandle>,
 }
 
 impl App {
@@ -193,6 +195,10 @@ impl App {
         let (cmd_tx, cmd_rx) = channel::<Command>();
         let (event_tx, event_rx) = channel::<Event>();
         let handle = worker::spawn(cmd_rx, event_tx, cc.egui_ctx.clone());
+
+        // App-icoon als texture voor de top bar; faalt het decoderen, dan
+        // draait de GUI gewoon zonder icoon in de kop.
+        let icon = load_icon_texture(&cc.egui_ctx);
 
         let mut app = Self {
             log: log_store,
@@ -222,6 +228,7 @@ impl App {
             custom_so: String::new(),
             log_filter: [true, true, true, true],
             auto_scroll: true,
+            icon,
         };
 
         // Stap 8: opgeslagen instellingen laden (velden zijn Option; ontbrekende
@@ -791,6 +798,20 @@ impl eframe::App for App {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, eframe::APP_KEY, &PersistedState::from_app(self));
     }
+}
+
+/// Decodeert het ingebedde app-icoon (assets/icon.png) naar een egui-texture
+/// voor de top bar. Cosmetisch: bij een leesfout draait de GUI gewoon zonder.
+fn load_icon_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    let img = image::load_from_memory(include_bytes!("../assets/icon.png"))
+        .ok()?
+        .into_rgba8();
+    let size = [img.width() as usize, img.height() as usize];
+    Some(ctx.load_texture(
+        "burnr_icon",
+        egui::ColorImage::from_rgba_unmultiplied(size, &img.into_raw()),
+        egui::TextureOptions::default(),
+    ))
 }
 
 /// Pad van het sessielogbestand (stap 9a): `$XDG_DATA_HOME` of

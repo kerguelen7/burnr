@@ -93,6 +93,7 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App) {
             });
 
             ui.add_space(4.0);
+            ui.label(egui::RichText::new("Algemeen").strong());
             ui.horizontal(|ui| {
                 ui.label("Padding (KiB):");
                 ui.add(egui::DragValue::new(&mut s.padding_kib).range(0..=100_000))
