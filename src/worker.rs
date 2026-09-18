@@ -306,20 +306,11 @@ pub enum Event {
     WorkerStopped,
 }
 
-/// Soort onderhoudsjob.
+/// Soort onderhoudsjob (UI-labels staan in de i18n-catalogus, MaintTexts).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MaintKind {
     Erase,
     Format,
-}
-
-impl MaintKind {
-    pub fn label(self) -> &'static str {
-        match self {
-            MaintKind::Erase => "wissen",
-            MaintKind::Format => "herstellen",
-        }
-    }
 }
 
 /// Start de worker-thread.

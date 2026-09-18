@@ -14,6 +14,7 @@
 use crate::ffi::{DiscStatus, DriveStatus};
 use crate::logger::Level;
 use crate::settings::MultiSession;
+use crate::worker::MaintKind;
 use serde::{Deserialize, Serialize};
 
 /// Interfacetaal. De serde-namen volgen de locale-conventie zodat het
@@ -63,8 +64,10 @@ pub struct Texts {
     pub drives: DrivesTexts,
     pub details: DetailsTexts,
     pub media: MediaTexts,
-    // Groeit mee met de migratie: branden/schijfkopie/onderhoud,
-    // logmeldingen (app/worker), help.
+    pub burn: BurnTexts,
+    pub image: DiscImageTexts,
+    pub maint: MaintTexts,
+    // Groeit mee met de migratie: logmeldingen (app/worker), help.
 }
 
 /// Gedeelde teksten over meerdere panels heen.
@@ -409,6 +412,93 @@ pub struct DrivesTexts {
     pub address_unknown: &'static str,
 }
 
+/// Eiland 2: branden (bronkeuze, snelheid, voortgang).
+pub struct BurnTexts {
+    pub island_header: &'static str,
+    /// Startknop bij ISO-bron.
+    pub burn_btn: &'static str,
+    /// Startknop bij bestandsbron.
+    pub compose_burn_btn: &'static str,
+    pub speed_label: &'static str,
+    pub speed_max: &'static str,
+    /// Prefix "max." vóór "{} kB/s".
+    pub speed_max_prefix: &'static str,
+    pub source_label: &'static str,
+    pub source_iso: &'static str,
+    pub source_files: &'static str,
+    pub multi_drive_hint: &'static str,
+    /// Filternaam in de bestandskiezer.
+    pub iso_filter: &'static str,
+    /// Filternaam in de bestandskiezer.
+    pub all_files_filter: &'static str,
+    pub add_files: &'static str,
+    pub add_folder: &'static str,
+    pub no_files: &'static str,
+    /// Woord "schatting" in de grootte-indicatie.
+    pub estimate_word: &'static str,
+    /// Woord "item(s)" in de grootte-indicatie.
+    pub items_word: &'static str,
+    pub volume_label: &'static str,
+    pub compose_hint: &'static str,
+    pub ms_import_hint: &'static str,
+    pub inspect_first: &'static str,
+    pub simulate_warn: &'static str,
+    pub uses_settings_hint: &'static str,
+    // Voortgang.
+    /// "100% geschreven — drive is nog bezig:" — de UI plakt " {phase}…" aan.
+    pub done_phase_prefix: &'static str,
+    /// "Fase" — de UI plakt ": {}" aan.
+    pub phase_prefix: &'static str,
+    pub sector_word: &'static str,
+    pub buffer_word: &'static str,
+    pub elapsed_word: &'static str,
+    pub simulate_banner: &'static str,
+    pub other_drive_burn: &'static str,
+}
+
+/// Eiland 3: schijfkopie lezen.
+pub struct DiscImageTexts {
+    pub island_header: &'static str,
+    pub make_copy_btn: &'static str,
+    pub copy_hint: &'static str,
+    pub other_drive_read: &'static str,
+    /// Suffix in "123 / 456 blokken".
+    pub blocks_suffix: &'static str,
+    /// Standaardbestandsnaam in de opsladialoog.
+    pub default_file: &'static str,
+}
+
+/// Onderhoud: wissen en de herstelpoging.
+pub struct MaintTexts {
+    pub title: &'static str,
+    pub other_drive_maint: &'static str,
+    pub erase_quick: &'static str,
+    pub erase_full: &'static str,
+    pub restore_header: &'static str,
+    pub restore_explain: &'static str,
+    pub restore_start_btn: &'static str,
+    pub options_label: &'static str,
+    pub dm_enable: &'static str,
+    pub dm_enable_hover: &'static str,
+    pub cert_enable: &'static str,
+    pub cert_enable_hover: &'static str,
+    pub overwritable_hint: &'static str,
+    pub not_rewritable_hint: &'static str,
+    /// In "Media …" tijdens de job: "wissen" / "erasing" / "wird gelöscht".
+    kind_erase: &'static str,
+    kind_restore: &'static str,
+}
+
+impl MaintTexts {
+    /// Label van een lopende onderhoudsjob.
+    pub fn kind_label(&self, kind: MaintKind) -> &'static str {
+        match kind {
+            MaintKind::Erase => self.kind_erase,
+            MaintKind::Format => self.kind_restore,
+        }
+    }
+}
+
 /// en-US: brontaal (terminologie volgens `docs/i18n-glossary.md`).
 const EN_US: Texts = Texts {
     top_bar: TopBarTexts {
@@ -585,6 +675,64 @@ const EN_US: Texts = Texts {
         src_get_performance: "GET PERFORMANCE",
         src_get_performance_read: "GET PERFORMANCE (read)",
         src_other: "other",
+    },
+    burn: BurnTexts {
+        island_header: "🔥 Burning",
+        burn_btn: "🔥 Burn",
+        compose_burn_btn: "🔥 Compose & burn",
+        speed_label: "Speed:",
+        speed_max: "Maximum",
+        speed_max_prefix: "max.",
+        source_label: "Source:",
+        source_iso: "ISO file",
+        source_files: "Files",
+        multi_drive_hint: "With multiple drives: the chosen source and settings go to every drive you start a burn on at the same time — different content per drive is not supported.",
+        iso_filter: "ISO images",
+        all_files_filter: "All files",
+        add_files: "➕ Add files…",
+        add_folder: "📁 Add folder…",
+        no_files: "No files selected yet — add files or folders.",
+        estimate_word: "estimate",
+        items_word: "item(s)",
+        volume_label: "Volume name:",
+        compose_hint: "Builds an ISO9660 image (Rock Ridge + Joliet, ISO level 3) with libisofs and burns it directly — no intermediate file.",
+        ms_import_hint: "ℹ Existing session will be imported — new files are added to the existing content.",
+        inspect_first: "(inspect first; burning requires blank or appendable media)",
+        simulate_warn: "⚠ Simulation is on, but this drive/media cannot simulate (all BD media, DVD-R DL and overwritable media can never simulate). Turn “Simulation” off in Settings → Burning — note: without simulation everything is written for real.",
+        uses_settings_hint: "Uses the settings on the right: speed, write mode, simulation, multi-session, padding. Erase and the restore attempt are under Maintenance on the media island.",
+        done_phase_prefix: "100% written — drive still busy:",
+        phase_prefix: "Phase",
+        sector_word: "sector",
+        buffer_word: "buffer",
+        elapsed_word: "⏱ elapsed",
+        simulate_banner: "SIMULATION — nothing is written permanently",
+        other_drive_burn: "A burn job is currently running on another drive.",
+    },
+    image: DiscImageTexts {
+        island_header: "💾 Disc image (data)",
+        make_copy_btn: "💾 Make copy",
+        copy_hint: "Reads all data blocks (2048 B) into one file — suitable for CD/DVD/BD data, not for CD audio.",
+        other_drive_read: "A copy is currently running on another drive.",
+        blocks_suffix: "blocks",
+        default_file: "copy.iso",
+    },
+    maint: MaintTexts {
+        title: "Maintenance",
+        other_drive_maint: "A maintenance job is running on another drive.",
+        erase_quick: "🧽 Erase (quick)",
+        erase_full: "🧽 Erase (full)",
+        restore_header: "🛠 Restore attempt for this media (advanced)",
+        restore_explain: "Attempts to re-format the media (MMC FORMAT UNIT) — meant as a rescue for discs in a bad state. The outcome depends on drive and firmware; a failed attempt is risk-free for the data, but can leave the disc temporarily unreadable (a power-cycle of the drive usually helps).",
+        restore_start_btn: "🛠 Start restore attempt",
+        options_label: "Options:",
+        dm_enable: "Enable defect management",
+        dm_enable_hover: "On: during the restore attempt the drive reserves spare areas and remaps bad blocks (recommended). Off: faster burning, no remapping — only on reliable media.",
+        cert_enable: "Enable certification",
+        cert_enable_hover: "On: during the restore attempt the drive verifies the whole surface — thorough and slow, and on some drives the reason the attempt fails. Off: quick format; the verification happens afterwards during the burn.",
+        overwritable_hint: "Directly overwritable media does not need erasing — writing directly is enough. A restore attempt (above) is only needed in special cases.",
+        not_rewritable_hint: "This media is not rewritable — erasing or a restore attempt is not possible.",
+        kind_erase: "erasing",
+        kind_restore: "restoring",
     },
 };
 
@@ -766,6 +914,64 @@ const NL_NL: Texts = Texts {
         src_get_performance_read: "GET PERFORMANCE (lees)",
         src_other: "overig",
     },
+    burn: BurnTexts {
+        island_header: "🔥 Branden",
+        burn_btn: "🔥 Branden",
+        compose_burn_btn: "🔥 Samenstellen & branden",
+        speed_label: "Snelheid:",
+        speed_max: "Maximaal",
+        speed_max_prefix: "max.",
+        source_label: "Bron:",
+        source_iso: "ISO-bestand",
+        source_files: "Bestanden",
+        multi_drive_hint: "Bij meerdere stations: de gekozen bron en instellingen gaan naar élle stations waar je tegelijk een brand start — per station verschillende inhoud wordt niet ondersteund.",
+        iso_filter: "ISO-images",
+        all_files_filter: "Alle bestanden",
+        add_files: "➕ Bestanden…",
+        add_folder: "📁 Map…",
+        no_files: "Nog geen bestanden gekozen — voeg bestanden of mappen toe.",
+        estimate_word: "schatting",
+        items_word: "item(s)",
+        volume_label: "Volume-naam:",
+        compose_hint: "Maakt een ISO9660-image (Rock Ridge + Joliet, ISO-niveau 3) met libisofs en brandt die direct — geen tussenbestand.",
+        ms_import_hint: "ℹ Bestaande sessie wordt geïmporteerd — nieuwe bestanden komen bij de bestaande inhoud.",
+        inspect_first: "(inspecteer eerst; branden vereist lege of onvolledige media)",
+        simulate_warn: "⚠ Simulatie staat aan, maar deze drive/media kan niet simuleren (alle BD-media, DVD-R DL en overbeschrijfbare media kunnen nooit simuleren). Zet “Simulatie” uit in Instellingen → Branden — let op: zonder simulatie wordt er écht geschreven.",
+        uses_settings_hint: "Gebruikt de instellingen rechts: snelheid, schrijfmodus, simulatie, multi-session, padding. Wissen en de herstelpoging gaan via Onderhoud in het Media-eiland.",
+        done_phase_prefix: "100% geschreven — drive is nog bezig:",
+        phase_prefix: "Fase",
+        sector_word: "sector",
+        buffer_word: "buffer",
+        elapsed_word: "⏱ verstreken",
+        simulate_banner: "SIMULATIE — er wordt niets definitief geschreven",
+        other_drive_burn: "Er draait momenteel een brandjob op een ander station.",
+    },
+    image: DiscImageTexts {
+        island_header: "💾 Schijfkopie (data)",
+        make_copy_btn: "💾 Kopie maken",
+        copy_hint: "Leest alle datablokken (2048 B) naar één bestand — geschikt voor CD/DVD/BD-data, niet voor CD-audio.",
+        other_drive_read: "Er draait momenteel een kopie op een ander station.",
+        blocks_suffix: "blokken",
+        default_file: "kopie.iso",
+    },
+    maint: MaintTexts {
+        title: "Onderhoud",
+        other_drive_maint: "Er draait een onderhoudsjob op een ander station.",
+        erase_quick: "🧽 Wissen (snel)",
+        erase_full: "🧽 Wissen (volledig)",
+        restore_header: "🛠 Herstelpoging voor deze media (gevorderd)",
+        restore_explain: "Probeert de media opnieuw te formatteren (MMC FORMAT UNIT) — bedoeld als redding voor schijven in een verkeerde toestand. De uitkomst hangt af van drive en firmware; een mislukte poging is risicoloos voor de data, maar kan de schijf tijdelijk onleesbaar maken (power-cycle van de drive helpt meestal).",
+        restore_start_btn: "🛠 Herstelpoging starten",
+        options_label: "Opties:",
+        dm_enable: "Defect management activeren",
+        dm_enable_hover: "Aan: de drive reserveert bij de herstelpoging spare-gebieden en hermapt slechte blokken (aanbevolen). Uit: sneller branden, geen hermapping — alleen op betrouwbare media.",
+        cert_enable: "Certificering activeren",
+        cert_enable_hover: "Aan: de drive controleert bij de herstelpoging het hele oppervlak — grondig en traag, en bij sommige drives de reden dat de poging faalt. Uit: snelformat; de controle gebeurt daarna alsnog tijdens het branden.",
+        overwritable_hint: "Direct overschrijfbare media hoeft niet gewist te worden — direct beschrijven volstaat. Een herstelpoging (hierboven) is alleen nodig in bijzondere gevallen.",
+        not_rewritable_hint: "Deze media is niet herbeschrijfbaar — wissen of een herstelpoging is niet mogelijk.",
+        kind_erase: "wissen",
+        kind_restore: "herstellen",
+    },
 };
 
 /// de-DE: eerste vertaling; technische termen (grab, NWA, FIFO, TOC, MMC)
@@ -945,5 +1151,63 @@ const DE_DE: Texts = Texts {
         src_get_performance: "GET PERFORMANCE",
         src_get_performance_read: "GET PERFORMANCE (lesen)",
         src_other: "sonstige",
+    },
+    burn: BurnTexts {
+        island_header: "🔥 Brennen",
+        burn_btn: "🔥 Brennen",
+        compose_burn_btn: "🔥 Zusammenstellen & brennen",
+        speed_label: "Geschwindigkeit:",
+        speed_max: "Maximal",
+        speed_max_prefix: "max.",
+        source_label: "Quelle:",
+        source_iso: "ISO-Datei",
+        source_files: "Dateien",
+        multi_drive_hint: "Bei mehreren Laufwerken: die gewählte Quelle und die Einstellungen gehen an alle Laufwerke, auf denen du gleichzeitig brennst — unterschiedliche Inhalte pro Laufwerk werden nicht unterstützt.",
+        iso_filter: "ISO-Images",
+        all_files_filter: "Alle Dateien",
+        add_files: "➕ Dateien hinzufügen…",
+        add_folder: "📁 Ordner hinzufügen…",
+        no_files: "Noch keine Dateien ausgewählt — Dateien oder Ordner hinzufügen.",
+        estimate_word: "Schätzung",
+        items_word: "Element(e)",
+        volume_label: "Volume-Name:",
+        compose_hint: "Erstellt ein ISO9660-Image (Rock Ridge + Joliet, ISO-Level 3) mit libisofs und brennt es direkt — ohne Zwischendatei.",
+        ms_import_hint: "ℹ Vorhandene Session wird importiert — neue Dateien kommen zum bestehenden Inhalt hinzu.",
+        inspect_first: "(zuerst inspizieren; Brennen erfordert leere oder appendable Medien)",
+        simulate_warn: "⚠ Simulation ist aktiv, aber dieses Laufwerk/Medium kann nicht simulieren (alle BD-Medien, DVD-R DL und wiederbeschreibbare Medien können nie simulieren). Schalte „Simulation“ in Einstellungen → Brennen aus — Achtung: ohne Simulation wird wirklich geschrieben.",
+        uses_settings_hint: "Verwendet die Einstellungen rechts: Geschwindigkeit, Schreibmodus, Simulation, Multi-Session, Padding. Löschen und der Herstellungsversuch laufen über Wartung auf der Medieninsel.",
+        done_phase_prefix: "100% geschrieben — Laufwerk ist noch beschäftigt:",
+        phase_prefix: "Phase",
+        sector_word: "Sektor",
+        buffer_word: "Puffer",
+        elapsed_word: "⏱ vergangen",
+        simulate_banner: "SIMULATION — es wird nichts endgültig geschrieben",
+        other_drive_burn: "Auf einem anderen Laufwerk läuft gerade ein Brennauftrag.",
+    },
+    image: DiscImageTexts {
+        island_header: "💾 Disc-Image (Daten)",
+        make_copy_btn: "💾 Kopie erstellen",
+        copy_hint: "Liest alle Datenblöcke (2048 B) in eine Datei — geeignet für CD/DVD/BD-Daten, nicht für CD-Audio.",
+        other_drive_read: "Auf einem anderen Laufwerk läuft gerade eine Kopie.",
+        blocks_suffix: "Blöcke",
+        default_file: "Kopie.iso",
+    },
+    maint: MaintTexts {
+        title: "Wartung",
+        other_drive_maint: "Auf einem anderen Laufwerk läuft ein Wartungsauftrag.",
+        erase_quick: "🧽 Löschen (schnell)",
+        erase_full: "🧽 Löschen (vollständig)",
+        restore_header: "🛠 Herstellungsversuch für dieses Medium (fortgeschritten)",
+        restore_explain: "Versucht, das Medium neu zu formatieren (MMC FORMAT UNIT) — gedacht als Rettung für Discs in einem falschen Zustand. Das Ergebnis hängt von Laufwerk und Firmware ab; ein fehlgeschlagener Versuch ist für die Daten risikolos, kann die Disc aber vorübergehend unlesbar machen (ein Power-Cycle des Laufwerks hilft meistens).",
+        restore_start_btn: "🛠 Herstellungsversuch starten",
+        options_label: "Optionen:",
+        dm_enable: "Defect Management aktivieren",
+        dm_enable_hover: "Ein: das Laufwerk reserviert beim Herstellungsversuch Spare-Bereiche und remappt schlechte Blöcke (empfohlen). Aus: schnelleres Brennen, kein Remapping — nur auf zuverlässigen Medien.",
+        cert_enable: "Zertifizierung aktivieren",
+        cert_enable_hover: "Ein: das Laufwerk prüft beim Herstellungsversuch die gesamte Oberfläche — gründlich und langsam, und bei manchen Laufwerken der Grund, warum der Versuch fehlschlägt. Aus: Schnellformat; die Prüfung erfolgt danach beim Brennen.",
+        overwritable_hint: "Direkt wiederbeschreibbare Medien müssen nicht gelöscht werden — direktes Beschreiben genügt. Ein Herstellungsversuch (oben) ist nur in Sonderfällen nötig.",
+        not_rewritable_hint: "Dieses Medium ist nicht wiederbeschreibbar — Löschen oder ein Herstellungsversuch ist nicht möglich.",
+        kind_erase: "wird gelöscht",
+        kind_restore: "Herstellungsversuch läuft",
     },
 };
