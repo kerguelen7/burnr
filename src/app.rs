@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use egui::Color32;
 
+use crate::ffi::DriveStatus;
 use crate::i18n::Lang;
 use crate::logger::{Level, LogFilter, LogStore};
 use crate::settings::BurnSettings;
@@ -102,8 +103,8 @@ pub struct ActiveBurn {
     pub buffer_pct: f32,
     pub fifo_pct: f32,
     pub simulate: bool,
-    /// Huidige fase ("schrijven", "track afsluiten", …).
-    pub phase: String,
+    /// Huidige fase van de drive (libburn-status; de UI vertaalt deze).
+    pub phase: DriveStatus,
     /// Verstreken tijd in seconden.
     pub elapsed_secs: f64,
     /// Verwachte resterende tijd in seconden (0 = onbekend).
@@ -671,7 +672,7 @@ impl App {
                     buffer_pct: 0.0,
                     fifo_pct: 0.0,
                     simulate,
-                    phase: self.lang.texts().burn.phase_starting.to_string(),
+                    phase: DriveStatus::Spawning,
                     elapsed_secs: 0.0,
                     eta_secs: 0.0,
                 });

@@ -495,10 +495,18 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
             if frac >= 1.0 {
                 ui.colored_label(
                     colors::WARN,
-                    format!("{} {}…", t.burn.done_phase_prefix, b.phase),
+                    format!(
+                        "{} {}…",
+                        t.burn.done_phase_prefix,
+                        t.media.drive_status_label(b.phase)
+                    ),
                 );
             } else {
-                ui.label(format!("{}: {}", t.burn.phase_prefix, b.phase));
+                ui.label(format!(
+                    "{}: {}",
+                    t.burn.phase_prefix,
+                    t.media.drive_status_label(b.phase)
+                ));
             }
             ui.horizontal(|ui| {
                 ui.label(format!(

@@ -34,16 +34,6 @@ pub enum MultiSession {
     Yes,
 }
 
-impl MultiSession {
-    /// Korte vorm voor logregels (UI-labels staan in de i18n-catalogus).
-    pub fn short(self) -> &'static str {
-        match self {
-            MultiSession::No => "nee",
-            MultiSession::Yes => "ja",
-        }
-    }
-}
-
 /// Brand-instellingen. `#[serde(default)]` zorgt dat opslagbestanden uit
 /// oudere versies (met inmiddels verwijderde velden) zonder fouten laden.
 #[derive(Clone, Debug, Serialize, Deserialize)]

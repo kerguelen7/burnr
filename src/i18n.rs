@@ -452,8 +452,6 @@ pub struct BurnTexts {
     pub done_phase_prefix: &'static str,
     /// "Fase" — de UI plakt ": {}" aan.
     pub phase_prefix: &'static str,
-    /// Eerste fase-waarde bij de start van een brandjob.
-    pub phase_starting: &'static str,
     pub sector_word: &'static str,
     pub buffer_word: &'static str,
     pub elapsed_word: &'static str,
@@ -747,7 +745,6 @@ const EN_US: Texts = Texts {
         uses_settings_hint: "Uses the settings on the right: speed, write mode, simulation, multi-session, padding. Erase and the restore attempt are under Maintenance on the media island.",
         done_phase_prefix: "100% written — drive still busy:",
         phase_prefix: "Phase",
-        phase_starting: "starting…",
         sector_word: "sector",
         buffer_word: "buffer",
         elapsed_word: "⏱ elapsed",
@@ -1015,7 +1012,6 @@ const NL_NL: Texts = Texts {
         uses_settings_hint: "Gebruikt de instellingen rechts: snelheid, schrijfmodus, simulatie, multi-session, padding. Wissen en de herstelpoging gaan via Onderhoud in het Media-eiland.",
         done_phase_prefix: "100% geschreven — drive is nog bezig:",
         phase_prefix: "Fase",
-        phase_starting: "starten…",
         sector_word: "sector",
         buffer_word: "buffer",
         elapsed_word: "⏱ verstreken",
@@ -1283,7 +1279,6 @@ const DE_DE: Texts = Texts {
         uses_settings_hint: "Verwendet die Einstellungen rechts: Geschwindigkeit, Schreibmodus, Simulation, Multi-Session, Padding. Löschen und der Herstellungsversuch laufen über Wartung auf der Medieninsel.",
         done_phase_prefix: "100% geschrieben — Laufwerk ist noch beschäftigt:",
         phase_prefix: "Phase",
-        phase_starting: "startet…",
         sector_word: "Sektor",
         buffer_word: "Puffer",
         elapsed_word: "⏱ vergangen",
@@ -1345,3 +1340,1499 @@ const DE_DE: Texts = Texts {
         media_cleared_after_eject: "Medieninformationen nach Auswurf gelöscht",
     },
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Worker-logmeldingen (stap 10b-6).
+//
+// De worker-logregels staan als methodes op `Lang`: één match per melding
+// houdt tekst en argumenten per taal bij elkaar — voor ~90 regels met
+// uiteenlopende argumenten is dat compacter en foutbestendiger dan
+// prefix-/suffix-velden. Pure-technische regels (libburn/libisofs-passthrough,
+// SCSI-log, format-diagnostiek) staan bewust NIET hier: die zijn
+// taalneutraal (Engelse technische terminologie).
+impl Lang {
+    // ── Levenscyclus / lading ──
+
+    pub fn w_reload_busy(self) -> String {
+        match self {
+            Lang::EnUs => "Reload is not possible while jobs are active".to_string(),
+            Lang::NlNl => "Herladen is niet mogelijk tijdens actieve jobs".to_string(),
+            Lang::DeDe => "Neuladen ist nicht möglich, während Aufträge aktiv sind".to_string(),
+        }
+    }
+
+    pub fn w_scan_busy(self) -> String {
+        match self {
+            Lang::EnUs => "Scanning is not possible while jobs are active".to_string(),
+            Lang::NlNl => "Scannen is niet mogelijk tijdens actieve jobs".to_string(),
+            Lang::DeDe => "Scan ist nicht möglich, während Aufträge aktiv sind".to_string(),
+        }
+    }
+
+    pub fn w_read_busy(self) -> String {
+        match self {
+            Lang::EnUs => "Reading is not possible while jobs are active".to_string(),
+            Lang::NlNl => "Lezen is niet mogelijk tijdens actieve jobs".to_string(),
+            Lang::DeDe => "Lesen ist nicht möglich, während Aufträge aktiv sind".to_string(),
+        }
+    }
+
+    pub fn w_inspect_busy_job(self, index: usize) -> String {
+        match self {
+            Lang::EnUs => format!("Drive {index} is busy with a job — inspection skipped"),
+            Lang::NlNl => format!("Station {index} is bezig met een job — inspectie overgeslagen"),
+            Lang::DeDe => format!(
+                "Laufwerk {index} ist mit einem Auftrag beschäftigt — Inspektion übersprungen"
+            ),
+        }
+    }
+
+    pub fn w_cancel_no_read(self) -> String {
+        match self {
+            Lang::EnUs => "Cancel requested, but no copy is running".to_string(),
+            Lang::NlNl => "Annuleren gevraagd, maar er is geen kopie bezig".to_string(),
+            Lang::DeDe => "Abbruch angefragt, aber es läuft keine Kopie".to_string(),
+        }
+    }
+
+    pub fn w_cancel_requested(self, index: usize) -> String {
+        match self {
+            Lang::EnUs => format!("Cancellation requested for drive {index}"),
+            Lang::NlNl => format!("Annuleren gevraagd voor station {index}"),
+            Lang::DeDe => format!("Abbruch für Laufwerk {index} angefragt"),
+        }
+    }
+
+    pub fn w_cancel_no_job(self, index: usize) -> String {
+        match self {
+            Lang::EnUs => format!("No active job on drive {index}"),
+            Lang::NlNl => format!("Geen actieve job op station {index}"),
+            Lang::DeDe => format!("Kein aktiver Auftrag auf Laufwerk {index}"),
+        }
+    }
+
+    pub fn w_device_open_mode(self, exclusive: bool) -> String {
+        match self {
+            Lang::EnUs => format!(
+                "Device open mode: {}",
+                if exclusive {
+                    "exclusive (O_EXCL)"
+                } else {
+                    "non-exclusive (suitable for automount)"
+                }
+            ),
+            Lang::NlNl => format!(
+                "Apparaat-openingsmodus: {}",
+                if exclusive {
+                    "exclusief (O_EXCL)"
+                } else {
+                    "niet-exclusief (geschikt bij automount)"
+                }
+            ),
+            Lang::DeDe => format!(
+                "Geräteöffnungsmodus: {}",
+                if exclusive {
+                    "exklusiv (O_EXCL)"
+                } else {
+                    "nicht-exklusiv (geeignet bei Automount)"
+                }
+            ),
+        }
+    }
+
+    pub fn w_burn_init_failed(self, cand: &str) -> String {
+        match self {
+            Lang::EnUs => format!("`{cand}`: burn_initialize() failed"),
+            Lang::NlNl => format!("`{cand}`: burn_initialize() mislukte"),
+            Lang::DeDe => format!("`{cand}`: burn_initialize() fehlgeschlagen"),
+        }
+    }
+
+    pub fn w_isofs_init_failed(self, cand: &str) -> String {
+        match self {
+            Lang::EnUs => format!("`{cand}`: iso_init() failed"),
+            Lang::NlNl => format!("`{cand}`: iso_init() mislukte"),
+            Lang::DeDe => format!("`{cand}`: iso_init() fehlgeschlagen"),
+        }
+    }
+
+    pub fn w_lib_loaded(self, version: &str, path: &str) -> String {
+        match self {
+            Lang::EnUs => format!("libburn {version} loaded via `{path}`"),
+            Lang::NlNl => format!("libburn {version} geladen via `{path}`"),
+            Lang::DeDe => format!("libburn {version} geladen über `{path}`"),
+        }
+    }
+
+    pub fn w_lib_failed(self, last_err: &str) -> String {
+        match self {
+            Lang::EnUs => format!("libburn not loaded — {last_err}"),
+            Lang::NlNl => format!("libburn niet geladen — {last_err}"),
+            Lang::DeDe => format!("libburn nicht geladen — {last_err}"),
+        }
+    }
+
+    pub fn w_isofs_loaded(self, version: &str, path: &str) -> String {
+        match self {
+            Lang::EnUs => format!("libisofs {version} loaded via `{path}`"),
+            Lang::NlNl => format!("libisofs {version} geladen via `{path}`"),
+            Lang::DeDe => format!("libisofs {version} geladen über `{path}`"),
+        }
+    }
+
+    pub fn w_isofs_unavailable_warn(self, last_err: &str) -> String {
+        match self {
+            Lang::EnUs => {
+                format!("libisofs not loaded — “compose files” is not available ({last_err})")
+            }
+            Lang::NlNl => format!(
+                "libisofs niet geladen — “bestanden samenstellen” is niet beschikbaar ({last_err})"
+            ),
+            Lang::DeDe => format!(
+                "libisofs nicht geladen — „Dateien zusammenstellen“ ist nicht verfügbar ({last_err})"
+            ),
+        }
+    }
+
+    pub fn w_lib_finished(self) -> String {
+        match self {
+            Lang::EnUs => "libburn shut down (burn_finish)".to_string(),
+            Lang::NlNl => "libburn afgesloten (burn_finish)".to_string(),
+            Lang::DeDe => "libburn beendet (burn_finish)".to_string(),
+        }
+    }
+
+    pub fn w_isofs_finished(self) -> String {
+        match self {
+            Lang::EnUs => "libisofs shut down (iso_finish)".to_string(),
+            Lang::NlNl => "libisofs afgesloten (iso_finish)".to_string(),
+            Lang::DeDe => "libisofs beendet (iso_finish)".to_string(),
+        }
+    }
+
+    // ── Scan ──
+
+    pub fn w_scan_no_lib(self) -> String {
+        match self {
+            Lang::EnUs => "Scan requested, but libburn is not loaded".to_string(),
+            Lang::NlNl => "Scan aangevraagd, maar libburn is niet geladen".to_string(),
+            Lang::DeDe => "Scan angefragt, aber libburn ist nicht geladen".to_string(),
+        }
+    }
+
+    pub fn w_scanning(self) -> String {
+        match self {
+            Lang::EnUs => "Scanning for disc drives…".to_string(),
+            Lang::NlNl => "Scannen naar schijfstations…".to_string(),
+            Lang::DeDe => "Suche nach Disc-Laufwerken…".to_string(),
+        }
+    }
+
+    pub fn w_scan_failed(self, ret: i32) -> String {
+        match self {
+            Lang::EnUs => format!("Scan failed (libburn error code {ret})"),
+            Lang::NlNl => format!("Scan mislukt (libburn-foutcode {ret})"),
+            Lang::DeDe => format!("Scan fehlgeschlagen (libburn-Fehlercode {ret})"),
+        }
+    }
+
+    pub fn w_scan_done(self, count: usize) -> String {
+        match self {
+            Lang::EnUs => format!("Scan complete: {count} drive(s) found"),
+            Lang::NlNl => format!("Scan voltooid: {count} station(s) gevonden"),
+            Lang::DeDe => format!("Scan abgeschlossen: {count} Laufwerk(e) gefunden"),
+        }
+    }
+
+    // ── Inspectie ──
+
+    pub fn w_inspect_no_lib(self) -> String {
+        match self {
+            Lang::EnUs => "Inspection requested, but libburn is not loaded".to_string(),
+            Lang::NlNl => "Inspectie aangevraagd, maar libburn is niet geladen".to_string(),
+            Lang::DeDe => "Inspektion angefragt, aber libburn ist nicht geladen".to_string(),
+        }
+    }
+
+    pub fn w_inspect_unknown(self, index: usize) -> String {
+        match self {
+            Lang::EnUs => format!("Inspection requested for unknown drive {index}"),
+            Lang::NlNl => format!("Inspectie aangevraagd voor onbekend station {index}"),
+            Lang::DeDe => format!("Inspektion für unbekanntes Laufwerk {index} angefragt"),
+        }
+    }
+
+    pub fn w_inspect_grab(self, index: usize, name: &str) -> String {
+        match self {
+            Lang::EnUs => format!("Drive {index} ({name}): grabbing…"),
+            Lang::NlNl => format!("Station {index} ({name}): grabben…"),
+            Lang::DeDe => format!("Laufwerk {index} ({name}): grabben…"),
+        }
+    }
+
+    /// Gedeelde grab-foutmelding (inspectie, branden, wissen, lezen).
+    pub fn w_grab_failed(self, index: usize, adr: &str) -> String {
+        let target = if adr.is_empty() {
+            match self {
+                Lang::EnUs => format!("drive {index}"),
+                Lang::NlNl => format!("station {index}"),
+                Lang::DeDe => format!("Laufwerk {index}"),
+            }
+        } else {
+            adr.to_string()
+        };
+        match self {
+            Lang::EnUs => format!(
+                "Grab failed for {target} — drive may be busy (e.g. automount by the \
+                 file manager). Turn off “Exclusive open” (Settings → Device) or \
+                 unmount the disc."
+            ),
+            Lang::NlNl => format!(
+                "Grab mislukt voor {target} — drive mogelijk bezet (bijv. automount \
+                 door de bestandsbeheerder). Zet “Exclusief openen” uit \
+                 (Instellingen → Apparaat) of unmount de schijf."
+            ),
+            Lang::DeDe => format!(
+                "Grab fehlgeschlagen für {target} — Laufwerk möglicherweise belegt \
+                 (z. B. Automount durch den Dateimanager). Schalte „Exklusiv öffnen“ \
+                 aus (Einstellungen → Gerät) oder hänge die Disc aus."
+            ),
+        }
+    }
+
+    pub fn w_inspect_grabbed(self, index: usize) -> String {
+        match self {
+            Lang::EnUs => format!("Drive {index}: grab succeeded; determining media status…"),
+            Lang::NlNl => format!("Station {index}: grab gelukt; media-status bepalen…"),
+            Lang::DeDe => {
+                format!("Laufwerk {index}: Grab erfolgreich; Medienstatus wird ermittelt…")
+            }
+        }
+    }
+
+    pub fn w_inspect_media(self, index: usize, status: DiscStatus) -> String {
+        let label = self.texts().media.disc_status_label(status);
+        match self {
+            Lang::EnUs => format!("Drive {index}: media = {label}"),
+            Lang::NlNl => format!("Station {index}: media = {label}"),
+            Lang::DeDe => format!("Laufwerk {index}: Medium = {label}"),
+        }
+    }
+
+    pub fn w_inspect_profile(self, index: usize, name: &str, profile_no: i32) -> String {
+        match self {
+            Lang::EnUs => {
+                format!("Drive {index}: media type = {name} (profile 0x{profile_no:02X})")
+            }
+            Lang::NlNl => {
+                format!("Station {index}: mediatype = {name} (profiel 0x{profile_no:02X})")
+            }
+            Lang::DeDe => {
+                format!("Laufwerk {index}: Medientyp = {name} (Profil 0x{profile_no:02X})")
+            }
+        }
+    }
+
+    pub fn w_inspect_capacity(self, index: usize, size: &str) -> String {
+        match self {
+            Lang::EnUs => format!("Drive {index}: readable capacity ≈ {size}"),
+            Lang::NlNl => format!("Station {index}: leesbare capaciteit ≈ {size}"),
+            Lang::DeDe => format!("Laufwerk {index}: lesbare Kapazität ≈ {size}"),
+        }
+    }
+
+    pub fn w_inspect_media_code(self, index: usize, code: &str, manu: &str) -> String {
+        let manu_part = if manu.is_empty() {
+            String::new()
+        } else {
+            format!(" — {manu}")
+        };
+        match self {
+            Lang::EnUs => format!("Drive {index}: media code = {code}{manu_part}"),
+            Lang::NlNl => format!("Station {index}: mediacode = {code}{manu_part}"),
+            Lang::DeDe => format!("Laufwerk {index}: Mediacode = {code}{manu_part}"),
+        }
+    }
+
+    pub fn w_inspect_dm_active(self, index: usize, free: i32, alloc: i32) -> String {
+        match self {
+            Lang::EnUs => format!(
+                "Drive {index}: defect management active — spare free {free} of {alloc} blocks"
+            ),
+            Lang::NlNl => format!(
+                "Station {index}: defect management actief — spare vrij {free} van {alloc} blokken"
+            ),
+            Lang::DeDe => format!(
+                "Laufwerk {index}: Defect Management aktiv — Spare frei {free} von {alloc} Blöcken"
+            ),
+        }
+    }
+
+    pub fn w_inspect_dm_off(self) -> String {
+        match self {
+            Lang::EnUs => "No BD spare info — defect management not active".to_string(),
+            Lang::NlNl => "Geen BD spare-info — defect management niet actief".to_string(),
+            Lang::DeDe => "Keine BD-Spare-Info — Defect Management nicht aktiv".to_string(),
+        }
+    }
+
+    pub fn w_inspect_toc(self, index: usize, sessions: usize, tracks: usize) -> String {
+        match self {
+            Lang::EnUs => {
+                format!("Drive {index}: TOC read — {sessions} session(s), {tracks} track(s)")
+            }
+            Lang::NlNl => {
+                format!("Station {index}: TOC gelezen — {sessions} sessie(s), {tracks} track(s)")
+            }
+            Lang::DeDe => {
+                format!("Laufwerk {index}: TOC gelesen — {sessions} Session(s), {tracks} Track(s)")
+            }
+        }
+    }
+
+    pub fn w_inspect_speeds(self, index: usize, n: usize) -> String {
+        match self {
+            Lang::EnUs => format!("Drive {index}: {n} speed(s) read"),
+            Lang::NlNl => format!("Station {index}: {n} snelheid(s) gelezen"),
+            Lang::DeDe => format!("Laufwerk {index}: {n} Geschwindigkeit(en) gelesen"),
+        }
+    }
+
+    pub fn w_inspect_done(self, index: usize) -> String {
+        match self {
+            Lang::EnUs => format!("Drive {index}: inspection done, drive released"),
+            Lang::NlNl => format!("Station {index}: inspectie klaar, station vrijgegeven"),
+            Lang::DeDe => format!("Laufwerk {index}: Inspektion fertig, Laufwerk freigegeben"),
+        }
+    }
+
+    // ── Branden (ISO) ──
+
+    pub fn w_burn_no_lib(self) -> String {
+        match self {
+            Lang::EnUs => "Burn requested, but libburn is not loaded".to_string(),
+            Lang::NlNl => "Branden aangevraagd, maar libburn is niet geladen".to_string(),
+            Lang::DeDe => "Brennen angefragt, aber libburn ist nicht geladen".to_string(),
+        }
+    }
+
+    pub fn w_burn_unknown(self, index: usize) -> String {
+        match self {
+            Lang::EnUs => format!("Burn requested for unknown drive {index}"),
+            Lang::NlNl => format!("Branden aangevraagd voor onbekend station {index}"),
+            Lang::DeDe => format!("Brennen für unbekanntes Laufwerk {index} angefragt"),
+        }
+    }
+
+    pub fn w_burn_no_iso(self) -> String {
+        match self {
+            Lang::EnUs => "Burn requested without an ISO file".to_string(),
+            Lang::NlNl => "Branden aangevraagd zonder ISO-bestand".to_string(),
+            Lang::DeDe => "Brennen ohne ISO-Datei angefragt".to_string(),
+        }
+    }
+
+    pub fn w_raw_iso_unsupported(self) -> String {
+        match self {
+            Lang::EnUs => "Write mode RAW is not supported for ISO files (requires 2352-byte source data)".to_string(),
+            Lang::NlNl => "Schrijfmodus RAW wordt niet ondersteund voor ISO-bestanden (vereist 2352-byte brondata)".to_string(),
+            Lang::DeDe => "Schreibmodus RAW wird für ISO-Dateien nicht unterstützt (erfordert 2352-Byte-Quelldaten)".to_string(),
+        }
+    }
+
+    pub fn w_raw_data_unsupported(self) -> String {
+        match self {
+            Lang::EnUs => "Write mode RAW is not supported for data images".to_string(),
+            Lang::NlNl => "Schrijfmodus RAW wordt niet ondersteund voor data-images".to_string(),
+            Lang::DeDe => "Schreibmodus RAW wird für Data-Images nicht unterstützt".to_string(),
+        }
+    }
+
+    pub fn w_burn_open_failed(self, path: &str, err: &str) -> String {
+        match self {
+            Lang::EnUs => format!("Cannot open ISO file `{path}`: {err}"),
+            Lang::NlNl => format!("Kan ISO-bestand `{path}` niet openen: {err}"),
+            Lang::DeDe => format!("ISO-Datei `{path}` konnte nicht geöffnet werden: {err}"),
+        }
+    }
+
+    pub fn w_empty_iso(self) -> String {
+        match self {
+            Lang::EnUs => "ISO file is empty".to_string(),
+            Lang::NlNl => "ISO-bestand is leeg".to_string(),
+            Lang::DeDe => "ISO-Datei ist leer".to_string(),
+        }
+    }
+
+    pub fn w_padding_note(self) -> String {
+        match self {
+            Lang::EnUs => "File size is not a multiple of 2048 bytes; the last sector will be padded with zeros".to_string(),
+            Lang::NlNl => "Bestandsgrootte is geen veelvoud van 2048 bytes; laatste sector wordt aangevuld met nullen".to_string(),
+            Lang::DeDe => "Die Dateigröße ist kein Vielfaches von 2048 Bytes; der letzte Sektor wird mit Nullen aufgefüllt".to_string(),
+        }
+    }
+
+    pub fn w_burn_starting(self, index: usize, path: &str, sectors: i32) -> String {
+        match self {
+            Lang::EnUs => format!("Drive {index}: starting burn job — `{path}` ({sectors} blocks)"),
+            Lang::NlNl => {
+                format!("Station {index}: brandjob starten — `{path}` ({sectors} blokken)")
+            }
+            Lang::DeDe => {
+                format!("Laufwerk {index}: Brennauftrag starten — `{path}` ({sectors} Blöcke)")
+            }
+        }
+    }
+
+    /// Instellingenregel vóór een brandjob; `timestamps` alleen bij de
+    /// data-image-variant.
+    pub fn w_settings_line(
+        self,
+        simulate: bool,
+        multi: MultiSession,
+        padding: i32,
+        overburn: bool,
+        timestamps: Option<bool>,
+    ) -> String {
+        let on_off = |v: bool| match self {
+            Lang::EnUs => {
+                if v {
+                    "on"
+                } else {
+                    "off"
+                }
+            }
+            Lang::NlNl => {
+                if v {
+                    "aan"
+                } else {
+                    "uit"
+                }
+            }
+            Lang::DeDe => {
+                if v {
+                    "ein"
+                } else {
+                    "aus"
+                }
+            }
+        };
+        let multi_word = match multi {
+            MultiSession::Yes => match self {
+                Lang::EnUs => "yes",
+                Lang::NlNl => "ja",
+                Lang::DeDe => "ja",
+            },
+            MultiSession::No => match self {
+                Lang::EnUs => "no",
+                Lang::NlNl => "nee",
+                Lang::DeDe => "nein",
+            },
+        };
+        let ts = match (self, timestamps) {
+            (_, None) => String::new(),
+            (Lang::EnUs, Some(true)) => ", timestamps=preserved".to_string(),
+            (Lang::EnUs, Some(false)) => ", timestamps=recording time".to_string(),
+            (Lang::NlNl, Some(true)) => ", tijdstempels=behouden".to_string(),
+            (Lang::NlNl, Some(false)) => ", tijdstempels=opnametijd".to_string(),
+            (Lang::DeDe, Some(true)) => ", Zeitstempel=behalten".to_string(),
+            (Lang::DeDe, Some(false)) => ", Zeitstempel=Aufnahmezeit".to_string(),
+        };
+        match self {
+            Lang::EnUs => format!(
+                "Settings: simulation={}, multi-session={}, padding={padding} KiB, overburn={}{ts}",
+                on_off(simulate),
+                multi_word,
+                on_off(overburn)
+            ),
+            Lang::NlNl => format!(
+                "Instellingen: simulatie={}, multi-session={}, padding={padding} KiB, overburn={}{ts}",
+                on_off(simulate),
+                multi_word,
+                on_off(overburn)
+            ),
+            Lang::DeDe => format!(
+                "Einstellungen: Simulation={}, Multi-Session={}, Padding={padding} KiB, Overburn={}{ts}",
+                on_off(simulate),
+                multi_word,
+                on_off(overburn)
+            ),
+        }
+    }
+
+    pub fn w_iso_size_warning(self, size: &str, avail: &str) -> String {
+        match self {
+            Lang::EnUs => {
+                format!("ISO file (≈ {size}) seems larger than the available space (≈ {avail})")
+            }
+            Lang::NlNl => {
+                format!("ISO-bestand (≈ {size}) lijkt groter dan de beschikbare ruimte (≈ {avail})")
+            }
+            Lang::DeDe => {
+                format!("ISO-Datei (≈ {size}) scheint größer als der verfügbare Platz (≈ {avail})")
+            }
+        }
+    }
+
+    pub fn w_image_size_warning(self, size: &str, avail: &str) -> String {
+        match self {
+            Lang::EnUs => {
+                format!("Image (≈ {size}) seems larger than the available space (≈ {avail})")
+            }
+            Lang::NlNl => {
+                format!("Image (≈ {size}) lijkt groter dan de beschikbare ruimte (≈ {avail})")
+            }
+            Lang::DeDe => {
+                format!("Image (≈ {size}) scheint größer als der verfügbare Platz (≈ {avail})")
+            }
+        }
+    }
+
+    pub fn w_speed(self, speed_max: bool, kbps: i32) -> String {
+        let detail = if speed_max {
+            match self {
+                Lang::EnUs => "maximum".to_string(),
+                Lang::NlNl => "maximaal".to_string(),
+                Lang::DeDe => "maximal".to_string(),
+            }
+        } else {
+            match self {
+                Lang::EnUs => format!("maximum {kbps} kB/s"),
+                Lang::NlNl => format!("maximaal {kbps} kB/s"),
+                Lang::DeDe => format!("maximal {kbps} kB/s"),
+            }
+        };
+        match self {
+            Lang::EnUs => format!("Speed: {detail}"),
+            Lang::NlNl => format!("Snelheid: {detail}"),
+            Lang::DeDe => format!("Geschwindigkeit: {detail}"),
+        }
+    }
+
+    pub fn w_bad_path_nul(self) -> String {
+        match self {
+            Lang::EnUs => "Invalid path (contains NUL byte)".to_string(),
+            Lang::NlNl => "Ongeldig pad (bevat NUL-byte)".to_string(),
+            Lang::DeDe => "Ungültiger Pfad (enthält NUL-Byte)".to_string(),
+        }
+    }
+
+    pub fn w_burn_started(self, index: usize, simulate: bool) -> String {
+        let sim = if simulate {
+            match self {
+                Lang::EnUs => " (SIMULATION — laser off)",
+                Lang::NlNl => " (SIMULATIE — laser uit)",
+                Lang::DeDe => " (SIMULATION — Laser aus)",
+            }
+        } else {
+            ""
+        };
+        match self {
+            Lang::EnUs => format!("Drive {index}: burning started{sim}…"),
+            Lang::NlNl => format!("Station {index}: branden gestart{sim}…"),
+            Lang::DeDe => format!("Laufwerk {index}: Brennen gestartet{sim}…"),
+        }
+    }
+
+    // ── Data-image (libisofs) ──
+
+    pub fn w_isofs_missing(self) -> String {
+        match self {
+            Lang::EnUs => "libisofs is not loaded — composing files is not available".to_string(),
+            Lang::NlNl => {
+                "libisofs is niet geladen — bestanden samenstellen is niet beschikbaar".to_string()
+            }
+            Lang::DeDe => {
+                "libisofs ist nicht geladen — Dateien zusammenstellen ist nicht verfügbar"
+                    .to_string()
+            }
+        }
+    }
+
+    pub fn w_burn_no_files(self) -> String {
+        match self {
+            Lang::EnUs => "No files selected to burn".to_string(),
+            Lang::NlNl => "Geen bestanden gekozen om te branden".to_string(),
+            Lang::DeDe => "Keine Dateien zum Brennen ausgewählt".to_string(),
+        }
+    }
+
+    pub fn w_burn_file_missing(self, p: &str) -> String {
+        match self {
+            Lang::EnUs => format!("File/folder does not exist: `{p}`"),
+            Lang::NlNl => format!("Bestand/map bestaat niet: `{p}`"),
+            Lang::DeDe => format!("Datei/Ordner existiert nicht: `{p}`"),
+        }
+    }
+
+    pub fn w_data_image_starting(self, index: usize, n: usize) -> String {
+        match self {
+            Lang::EnUs => format!("Drive {index}: composing data image from {n} item(s)…"),
+            Lang::NlNl => format!("Station {index}: data-image samenstellen uit {n} item(s)…"),
+            Lang::DeDe => {
+                format!("Laufwerk {index}: Data-Image aus {n} Element(en) zusammenstellen…")
+            }
+        }
+    }
+
+    pub fn w_bad_volume_nul(self) -> String {
+        match self {
+            Lang::EnUs => "Invalid volume name (contains NUL byte)".to_string(),
+            Lang::NlNl => "Ongeldige volumenaam (bevat NUL-byte)".to_string(),
+            Lang::DeDe => "Ungültiger Volumename (enthält NUL-Byte)".to_string(),
+        }
+    }
+
+    pub fn w_image_create_failed(self) -> String {
+        match self {
+            Lang::EnUs => "Cannot create the ISO image".to_string(),
+            Lang::NlNl => "Kan de ISO-image niet aanmaken".to_string(),
+            Lang::DeDe => "ISO-Image konnte nicht erstellt werden".to_string(),
+        }
+    }
+
+    pub fn w_import_start(self, start_block: i32) -> String {
+        match self {
+            Lang::EnUs => format!(
+                "Existing session (start LBA {start_block}) will be imported — new files are added to the existing content…"
+            ),
+            Lang::NlNl => format!(
+                "Bestaande sessie (begin LBA {start_block}) wordt geïmporteerd — nieuwe bestanden komen bij de bestaande inhoud…"
+            ),
+            Lang::DeDe => format!(
+                "Vorhandene Session (Start-LBA {start_block}) wird importiert — neue Dateien kommen zum bestehenden Inhalt hinzu…"
+            ),
+        }
+    }
+
+    pub fn w_bad_dev_nul(self) -> String {
+        match self {
+            Lang::EnUs => "Invalid device path (contains NUL byte)".to_string(),
+            Lang::NlNl => "Ongeldig apparaatpad (bevat NUL-byte)".to_string(),
+            Lang::DeDe => "Ungültiger Gerätepfad (enthält NUL-Byte)".to_string(),
+        }
+    }
+
+    pub fn w_import_open_failed(self) -> String {
+        match self {
+            Lang::EnUs => "Cannot open the disc as a read source".to_string(),
+            Lang::NlNl => "Kan de schijf niet als leesbron openen".to_string(),
+            Lang::DeDe => "Die Disc konnte nicht als Lesequelle geöffnet werden".to_string(),
+        }
+    }
+
+    pub fn w_read_opts_failed(self) -> String {
+        match self {
+            Lang::EnUs => "Cannot create the read options".to_string(),
+            Lang::NlNl => "Kan de lees-opties niet aanmaken".to_string(),
+            Lang::DeDe => "Die Leseoptionen konnten nicht erstellt werden".to_string(),
+        }
+    }
+
+    pub fn w_import_done(self, blocks: i32, size: &str) -> String {
+        match self {
+            Lang::EnUs => format!("Existing session imported: {blocks} blocks (≈ {size})"),
+            Lang::NlNl => format!("Bestaande sessie geïmporteerd: {blocks} blokken (≈ {size})"),
+            Lang::DeDe => format!("Vorhandene Session importiert: {blocks} Blöcke (≈ {size})"),
+        }
+    }
+
+    pub fn w_import_failed(self) -> String {
+        match self {
+            Lang::EnUs => {
+                "Importing the existing session failed — see the libisofs messages".to_string()
+            }
+            Lang::NlNl => {
+                "Importeren van de bestaande sessie mislukt — zie de libisofs-meldingen".to_string()
+            }
+            Lang::DeDe => {
+                "Importieren der vorhandenen Session fehlgeschlagen — siehe die libisofs-Meldungen"
+                    .to_string()
+            }
+        }
+    }
+
+    pub fn w_added_folder(self, p: &str) -> String {
+        match self {
+            Lang::EnUs => format!("Added: {p} (folder, recursive)"),
+            Lang::NlNl => format!("Toegevoegd: {p} (map, recursief)"),
+            Lang::DeDe => format!("Hinzugefügt: {p} (Ordner, rekursiv)"),
+        }
+    }
+
+    pub fn w_added_file(self, p: &str) -> String {
+        match self {
+            Lang::EnUs => format!("Added: {p} (file)"),
+            Lang::NlNl => format!("Toegevoegd: {p} (bestand)"),
+            Lang::DeDe => format!("Hinzugefügt: {p} (Datei)"),
+        }
+    }
+
+    pub fn w_item_skipped(self, e: &str) -> String {
+        match self {
+            Lang::EnUs => format!("Item skipped: {e}"),
+            Lang::NlNl => format!("Item overgeslagen: {e}"),
+            Lang::DeDe => format!("Element übersprungen: {e}"),
+        }
+    }
+
+    pub fn w_nothing_added(self) -> String {
+        match self {
+            Lang::EnUs => "No item could be added to the image".to_string(),
+            Lang::NlNl => "Geen enkel item kon aan de image worden toegevoegd".to_string(),
+            Lang::DeDe => "Kein Element konnte zum Image hinzugefügt werden".to_string(),
+        }
+    }
+
+    pub fn w_nwa_failed(self) -> String {
+        match self {
+            Lang::EnUs => "Cannot determine the next writable address (NWA) — continuing multi-session failed".to_string(),
+            Lang::NlNl => "Kan de volgende schrijfadres (NWA) niet bepalen — multi-session voortzetten mislukt".to_string(),
+            Lang::DeDe => "Die nächste Schreibadresse (NWA) konnte nicht ermittelt werden — Fortsetzen der Multi-Session fehlgeschlagen".to_string(),
+        }
+    }
+
+    pub fn w_nwa(self, nwa: i32) -> String {
+        match self {
+            Lang::EnUs => format!("New session starts at LBA {nwa}"),
+            Lang::NlNl => format!("Nieuwe sessie begint op LBA {nwa}"),
+            Lang::DeDe => format!("Neue Session beginnt bei LBA {nwa}"),
+        }
+    }
+
+    pub fn w_isofs_opts_failed(self) -> String {
+        match self {
+            Lang::EnUs => "Cannot create the libisofs write options".to_string(),
+            Lang::NlNl => "Kan de libisofs write-opts niet aanmaken".to_string(),
+            Lang::DeDe => "Die libisofs-Write-Optionen konnten nicht erstellt werden".to_string(),
+        }
+    }
+
+    pub fn w_layout(self) -> String {
+        match self {
+            Lang::EnUs => "Calculating image layout (this may take a while)…".to_string(),
+            Lang::NlNl => "Image-layout berekenen (kan even duren)…".to_string(),
+            Lang::DeDe => "Image-Layout wird berechnet (kann eine Weile dauern)…".to_string(),
+        }
+    }
+
+    pub fn w_compose_failed(self) -> String {
+        match self {
+            Lang::EnUs => "Composing the image failed — see the libisofs messages".to_string(),
+            Lang::NlNl => {
+                "Samenstellen van de image mislukt — zie de libisofs-meldingen".to_string()
+            }
+            Lang::DeDe => {
+                "Zusammenstellen des Images fehlgeschlagen — siehe die libisofs-Meldungen"
+                    .to_string()
+            }
+        }
+    }
+
+    pub fn w_fifo_failed(self) -> String {
+        match self {
+            Lang::EnUs => "Cannot create the FIFO around the image source".to_string(),
+            Lang::NlNl => "Kan de FIFO om de image-bron niet aanmaken".to_string(),
+            Lang::DeDe => "Die FIFO um die Image-Quelle konnte nicht erstellt werden".to_string(),
+        }
+    }
+
+    pub fn w_size_unknown(self) -> String {
+        match self {
+            Lang::EnUs => "Image size unknown — composition aborted".to_string(),
+            Lang::NlNl => "Imagegrootte onbekend — samenstellen afgebroken".to_string(),
+            Lang::DeDe => "Imagegröße unbekannt — Zusammenstellen abgebrochen".to_string(),
+        }
+    }
+
+    pub fn w_image_ready(self, sectors: i32, size: &str, n: usize) -> String {
+        match self {
+            Lang::EnUs => format!("Image ready: {sectors} blocks (≈ {size}) from {n} item(s)"),
+            Lang::NlNl => format!("Image klaar: {sectors} blokken (≈ {size}) uit {n} item(s)"),
+            Lang::DeDe => format!("Image fertig: {sectors} Blöcke (≈ {size}) aus {n} Element(en)"),
+        }
+    }
+
+    pub fn w_model_failed(self) -> String {
+        match self {
+            Lang::EnUs => "Cannot build the libburn model".to_string(),
+            Lang::NlNl => "Kan het libburn-model niet opbouwen".to_string(),
+            Lang::DeDe => "Das libburn-Modell konnte nicht aufgebaut werden".to_string(),
+        }
+    }
+
+    pub fn w_attach_failed(self) -> String {
+        match self {
+            Lang::EnUs => "Cannot attach the libisofs source to the track".to_string(),
+            Lang::NlNl => "Kan de libisofs-bron niet aan de track koppelen".to_string(),
+            Lang::DeDe => {
+                "Die libisofs-Quelle konnte nicht an den Track gekoppelt werden".to_string()
+            }
+        }
+    }
+
+    // ── Grab / media-check / schrijfmodus ──
+
+    pub fn w_media_not_writable(self, status: DiscStatus) -> String {
+        let label = self.texts().media.disc_status_label(status);
+        match self {
+            Lang::EnUs => format!(
+                "Media is not writable (status: {label}) — blank or appendable media required"
+            ),
+            Lang::NlNl => format!(
+                "Media is niet beschrijfbaar (status: {label}) — lege of onvolledige media nodig"
+            ),
+            Lang::DeDe => format!(
+                "Medium ist nicht beschreibbar (Status: {label}) — leere oder appendable Medien erforderlich"
+            ),
+        }
+    }
+
+    pub fn w_media_appendable(self) -> String {
+        match self {
+            Lang::EnUs => {
+                "Media is appendable — the new session will be appended to it".to_string()
+            }
+            Lang::NlNl => {
+                "Media is onvolledig (appendable) — de nieuwe sessie wordt eraan toegevoegd"
+                    .to_string()
+            }
+            Lang::DeDe => {
+                "Medium ist appendable — die neue Session wird daran angehängt".to_string()
+            }
+        }
+    }
+
+    pub fn w_make_opts_failed(self) -> String {
+        match self {
+            Lang::EnUs => "Cannot create the write options".to_string(),
+            Lang::NlNl => "Kan de write-opts niet aanmaken".to_string(),
+            Lang::DeDe => "Die Write-Optionen konnten nicht erstellt werden".to_string(),
+        }
+    }
+
+    pub fn w_overwritable_note(self, profile_no: i32) -> String {
+        match self {
+            Lang::EnUs => format!(
+                "Media (profile 0x{profile_no:02X}) is directly overwritable — multi-session does not apply; the media always stays writable"
+            ),
+            Lang::NlNl => format!(
+                "Media (profiel 0x{profile_no:02X}) is direct overschrijfbaar — multi-session is niet van toepassing; de media blijft altijd beschrijfbaar"
+            ),
+            Lang::DeDe => format!(
+                "Medium (Profil 0x{profile_no:02X}) ist direkt wiederbeschreibbar — Multi-Session trifft nicht zu; das Medium bleibt immer beschreibbar"
+            ),
+        }
+    }
+
+    pub fn w_overburn_note(self) -> String {
+        match self {
+            Lang::EnUs => "Overburn/force on: some conformity checks are ignored".to_string(),
+            Lang::NlNl => {
+                "Overburn/force aan: enkele conformiteitschecks worden genegeerd".to_string()
+            }
+            Lang::DeDe => {
+                "Overburn/Force ein: einige Konformitätsprüfungen werden ignoriert".to_string()
+            }
+        }
+    }
+
+    pub fn w_write_mode_failed(self, reasons: &str) -> String {
+        let r = if reasons.is_empty() {
+            match self {
+                Lang::EnUs => "unknown reason",
+                Lang::NlNl => "onbekende reden",
+                Lang::DeDe => "unbekannter Grund",
+            }
+        } else {
+            reasons
+        };
+        match self {
+            Lang::EnUs => format!("No suitable write mode found: {r}"),
+            Lang::NlNl => format!("Geen geschikte schrijfmodus gevonden: {r}"),
+            Lang::DeDe => format!("Kein geeigneter Schreibmodus gefunden: {r}"),
+        }
+    }
+
+    pub fn w_write_mode_auto(self, name: &str) -> String {
+        match self {
+            Lang::EnUs => format!("Write mode (auto): {name}"),
+            Lang::NlNl => format!("Schrijfmodus (auto): {name}"),
+            Lang::DeDe => format!("Schreibmodus (auto): {name}"),
+        }
+    }
+
+    pub fn w_tao_unsupported(self) -> String {
+        match self {
+            Lang::EnUs => "TAO + MODE1 is not supported by this drive/media".to_string(),
+            Lang::NlNl => "TAO + MODE1 wordt niet door deze drive/media ondersteund".to_string(),
+            Lang::DeDe => {
+                "TAO + MODE1 wird von diesem Laufwerk/Medium nicht unterstützt".to_string()
+            }
+        }
+    }
+
+    pub fn w_write_mode_tao(self) -> String {
+        match self {
+            Lang::EnUs => "Write mode: TAO (track-at-once)".to_string(),
+            Lang::NlNl => "Schrijfmodus: TAO (track-at-once)".to_string(),
+            Lang::DeDe => "Schreibmodus: TAO (track-at-once)".to_string(),
+        }
+    }
+
+    pub fn w_sao_unsupported(self) -> String {
+        match self {
+            Lang::EnUs => "SAO + SAO block type is not supported by this drive/media".to_string(),
+            Lang::NlNl => {
+                "SAO + SAO-bloktype wordt niet door deze drive/media ondersteund".to_string()
+            }
+            Lang::DeDe => {
+                "SAO + SAO-Blocktyp wird von diesem Laufwerk/Medium nicht unterstützt".to_string()
+            }
+        }
+    }
+
+    pub fn w_write_mode_sao(self) -> String {
+        match self {
+            Lang::EnUs => "Write mode: SAO (session-at-once)".to_string(),
+            Lang::NlNl => "Schrijfmodus: SAO (session-at-once)".to_string(),
+            Lang::DeDe => "Schreibmodus: SAO (session-at-once)".to_string(),
+        }
+    }
+
+    pub fn w_precheck_failed(self, reasons: &str) -> String {
+        let r = if reasons.is_empty() {
+            match self {
+                Lang::EnUs => "unknown reason",
+                Lang::NlNl => "onbekende reden",
+                Lang::DeDe => "unbekannter Grund",
+            }
+        } else {
+            reasons
+        };
+        match self {
+            Lang::EnUs => format!("This write mode is rejected for this drive/media: {r}"),
+            Lang::NlNl => format!("Deze schrijfmodus wordt afgewezen voor deze drive/media: {r}"),
+            Lang::DeDe => {
+                format!("Dieser Schreibmodus wird für dieses Laufwerk/Medium abgelehnt: {r}")
+            }
+        }
+    }
+
+    pub fn w_simulation_hint(self) -> String {
+        match self {
+            Lang::EnUs => "Tip: “Simulation (laser off)” is not supported by this drive/media. Simulation practically only works with CD media; all BD media, DVD-R DL and overwritable media (DVD+RW, DVD-RAM, DVD-RW RO) can never simulate. Turn “Simulation” off in Settings → Burning — note: without simulation everything is written for real.".to_string(),
+            Lang::NlNl => "Tip: “Simulatie (laser uit)” wordt door deze drive/media niet ondersteund. Simulatie werkt praktisch alleen bij CD-media; alle BD-media, DVD-R DL en overbeschrijfbare media (DVD+RW, DVD-RAM, DVD-RW RO) kunnen nooit simuleren. Zet “Simulatie” uit in Instellingen → Branden — let op: zonder simulatie wordt er écht geschreven.".to_string(),
+            Lang::DeDe => "Tipp: „Simulation (Laser aus)“ wird von diesem Laufwerk/Medium nicht unterstützt. Simulation funktioniert praktisch nur bei CD-Medien; alle BD-Medien, DVD-R DL und wiederbeschreibbare Medien (DVD+RW, DVD-RAM, DVD-RW RO) können nie simulieren. Schalte „Simulation“ in Einstellungen → Brennen aus — Achtung: ohne Simulation wird wirklich geschrieben.".to_string(),
+        }
+    }
+}
+
+impl Lang {
+    // ── Job-polling / eject / afronding ──
+
+    pub fn w_maint_progress(self, kind: MaintKind, pct: i32) -> String {
+        match (self, kind) {
+            (Lang::EnUs, MaintKind::Erase) => format!("Erasing… {pct}%"),
+            (Lang::NlNl, MaintKind::Erase) => format!("Wissen… {pct}%"),
+            (Lang::DeDe, MaintKind::Erase) => format!("Löschen… {pct}%"),
+            (Lang::EnUs, MaintKind::Format) => format!("Restore attempt… {pct}%"),
+            (Lang::NlNl, MaintKind::Format) => format!("Herstelpoging… {pct}%"),
+            (Lang::DeDe, MaintKind::Format) => format!("Herstellungsversuch… {pct}%"),
+        }
+    }
+
+    pub fn w_eject_mounted(self, adr: &str) -> String {
+        match self {
+            Lang::EnUs => format!("Disc `{adr}` is mounted — unmounting first for the eject…"),
+            Lang::NlNl => {
+                format!("Schijf `{adr}` is aangekoppeld — eerst unmounten voor de eject…")
+            }
+            Lang::DeDe => {
+                format!("Disc `{adr}` ist eingehängt — wird zuerst für den Auswurf ausgehängt…")
+            }
+        }
+    }
+
+    pub fn w_regrab_failed(self, attempt: i32) -> String {
+        match self {
+            Lang::EnUs => format!("Re-grab attempt {attempt} failed — retrying in a second…"),
+            Lang::NlNl => format!("Re-grab poging {attempt} mislukt — nogmaals over een seconde…"),
+            Lang::DeDe => {
+                format!("Re-Grab-Versuch {attempt} fehlgeschlagen — Wiederholung in einer Sekunde…")
+            }
+        }
+    }
+
+    pub fn w_eject_sent(self) -> String {
+        match self {
+            Lang::EnUs => "Eject request sent".to_string(),
+            Lang::NlNl => "Eject-verzoek verzonden".to_string(),
+            Lang::DeDe => "Auswurfanfrage gesendet".to_string(),
+        }
+    }
+
+    pub fn w_eject_manual(self) -> String {
+        match self {
+            Lang::EnUs => "Could not re-grab the drive for the eject — manual eject needed".to_string(),
+            Lang::NlNl => "Kon het station niet opnieuw grabben voor de eject — eject handmatig nodig".to_string(),
+            Lang::DeDe => "Das Laufwerk konnte für den Auswurf nicht erneut gegrabbed werden — manuelles Auswerfen nötig".to_string(),
+        }
+    }
+
+    pub fn w_drive_released(self) -> String {
+        match self {
+            Lang::EnUs => "Drive released".to_string(),
+            Lang::NlNl => "Drive vrijgegeven".to_string(),
+            Lang::DeDe => "Laufwerk freigegeben".to_string(),
+        }
+    }
+
+    pub fn w_burn_cancelled(self) -> String {
+        match self {
+            Lang::EnUs => "Burn job cancelled".to_string(),
+            Lang::NlNl => "Brandjob geannuleerd".to_string(),
+            Lang::DeDe => "Brennauftrag abgebrochen".to_string(),
+        }
+    }
+
+    pub fn w_burn_done(self, index: usize, simulate: bool, keep_open: bool) -> String {
+        let sim = if simulate {
+            match self {
+                Lang::EnUs => " (simulation)",
+                Lang::NlNl => " (simulatie)",
+                Lang::DeDe => " (Simulation)",
+            }
+        } else {
+            ""
+        };
+        let media = match (self, keep_open) {
+            (Lang::EnUs, true) => "stays appendable",
+            (Lang::EnUs, false) => "is closed",
+            (Lang::NlNl, true) => "blijft appendable",
+            (Lang::NlNl, false) => "is afgesloten",
+            (Lang::DeDe, true) => "bleibt appendable",
+            (Lang::DeDe, false) => "ist abgeschlossen",
+        };
+        match self {
+            Lang::EnUs => format!("Drive {index}: burn job done{sim} — media {media}"),
+            Lang::NlNl => format!("Station {index}: brandjob klaar{sim} — media {media}"),
+            Lang::DeDe => format!("Laufwerk {index}: Brennauftrag fertig{sim} — Medium {media}"),
+        }
+    }
+
+    pub fn w_burn_summary(self, index: usize, size: &str, dur: &str, kbps: f64) -> String {
+        match self {
+            Lang::EnUs => format!("Drive {index}: {size} in {dur} — average {kbps:.0} kB/s"),
+            Lang::NlNl => format!("Station {index}: {size} in {dur} — gemiddeld {kbps:.0} kB/s"),
+            Lang::DeDe => {
+                format!("Laufwerk {index}: {size} in {dur} — durchschnittlich {kbps:.0} kB/s")
+            }
+        }
+    }
+
+    pub fn w_burn_failed(self, index: usize) -> String {
+        match self {
+            Lang::EnUs => format!(
+                "Burn job on drive {index} failed — the drive reports the write did not \
+                 complete properly. Check the media (quality/warping) and try a lower \
+                 speed or another disc"
+            ),
+            Lang::NlNl => format!(
+                "Brandjob op station {index} mislukt — de drive meldt dat de \
+                 schrijfactie niet goed is verlopen. Controleer de media \
+                 (kwaliteit/kromming) en probeer eventueel een lagere \
+                 snelheid of andere schijf"
+            ),
+            Lang::DeDe => format!(
+                "Brennauftrag auf Laufwerk {index} fehlgeschlagen — das Laufwerk meldet, \
+                 dass der Schreibvorgang nicht korrekt abgeschlossen wurde. Prüfe das \
+                 Medium (Qualität/Verwölbung) und versuche gegebenenfalls eine niedrigere \
+                 Geschwindigkeit oder eine andere Disc"
+            ),
+        }
+    }
+
+    pub fn w_erase_cancelled(self) -> String {
+        match self {
+            Lang::EnUs => "Erase cancelled".to_string(),
+            Lang::NlNl => "Wissen geannuleerd".to_string(),
+            Lang::DeDe => "Löschen abgebrochen".to_string(),
+        }
+    }
+
+    pub fn w_erased(self) -> String {
+        match self {
+            Lang::EnUs => "Media erased".to_string(),
+            Lang::NlNl => "Media gewist".to_string(),
+            Lang::DeDe => "Medium gelöscht".to_string(),
+        }
+    }
+
+    pub fn w_erase_failed(self) -> String {
+        match self {
+            Lang::EnUs => "Erase failed — see the libburn messages above".to_string(),
+            Lang::NlNl => "Wissen mislukt — zie de libburn-meldingen hierboven".to_string(),
+            Lang::DeDe => "Löschen fehlgeschlagen — siehe die libburn-Meldungen oben".to_string(),
+        }
+    }
+
+    pub fn w_restore_cancelled(self) -> String {
+        match self {
+            Lang::EnUs => "Restore attempt cancelled".to_string(),
+            Lang::NlNl => "Herstelpoging geannuleerd".to_string(),
+            Lang::DeDe => "Herstellungsversuch abgebrochen".to_string(),
+        }
+    }
+
+    pub fn w_restore_done(self) -> String {
+        match self {
+            Lang::EnUs => "Restore attempt succeeded — media re-formatted".to_string(),
+            Lang::NlNl => "Herstelpoging geslaagd — media opnieuw geformatteerd".to_string(),
+            Lang::DeDe => "Herstellungsversuch erfolgreich — Medium neu formatiert".to_string(),
+        }
+    }
+
+    pub fn w_restore_failed(self) -> String {
+        match self {
+            Lang::EnUs => "Restore attempt failed — see the libburn messages above. Tips: try toggling ‘Enable certification’ and ‘Enable defect management’ — some drives refuse BD-RE without spare areas or with full certification".to_string(),
+            Lang::NlNl => "Herstelpoging mislukt — zie de libburn-meldingen hierboven. Tips: wissel ‘Certificering activeren’ en ‘Defect management activeren’ eens uit — sommige drives weigeren BD-RE zonder spare-gebieden of met volledige certificatie".to_string(),
+            Lang::DeDe => "Herstellungsversuch fehlgeschlagen — siehe die libburn-Meldungen oben. Tipps: wechsle zwischen „Zertifizierung aktivieren“ und „Defect Management aktivieren“ — manche Laufwerke verweigern BD-RE ohne Spare-Bereiche oder mit voller Zertifizierung".to_string(),
+        }
+    }
+
+    // ── Brandmodel (libburn disc/session/track) ──
+
+    pub fn w_model_create_failed(self) -> String {
+        match self {
+            Lang::EnUs => "Cannot create the disc/session/track model".to_string(),
+            Lang::NlNl => "Kan disc/session/track-model niet aanmaken".to_string(),
+            Lang::DeDe => "Disc/Session/Track-Modell konnte nicht erstellt werden".to_string(),
+        }
+    }
+
+    pub fn w_model_add_failed(self) -> String {
+        match self {
+            Lang::EnUs => "Cannot add session/track to the model".to_string(),
+            Lang::NlNl => "Kan session/track niet aan het model toevoegen".to_string(),
+            Lang::DeDe => "Session/Track konnte nicht zum Modell hinzugefügt werden".to_string(),
+        }
+    }
+
+    pub fn w_file_source_failed(self) -> String {
+        match self {
+            Lang::EnUs => "Cannot create the file source (file unreadable?)".to_string(),
+            Lang::NlNl => "Kan de file-bron niet aanmaken (bestand onleesbaar?)".to_string(),
+            Lang::DeDe => {
+                "Die Dateiquelle konnte nicht erstellt werden (Datei unlesbar?)".to_string()
+            }
+        }
+    }
+
+    pub fn w_fifo_source_failed(self) -> String {
+        match self {
+            Lang::EnUs => "Cannot create the FIFO source".to_string(),
+            Lang::NlNl => "Kan de FIFO-bron niet aanmaken".to_string(),
+            Lang::DeDe => "Die FIFO-Quelle konnte nicht erstellt werden".to_string(),
+        }
+    }
+
+    pub fn w_source_attach_failed(self) -> String {
+        match self {
+            Lang::EnUs => "Cannot attach the source to the track".to_string(),
+            Lang::NlNl => "Kan de bron niet aan de track koppelen".to_string(),
+            Lang::DeDe => "Die Quelle konnte nicht an den Track gekoppelt werden".to_string(),
+        }
+    }
+
+    pub fn w_track_size_failed(self) -> String {
+        match self {
+            Lang::EnUs => "Cannot set the track size".to_string(),
+            Lang::NlNl => "Kan de trackgrootte niet instellen".to_string(),
+            Lang::DeDe => "Die Trackgröße konnte nicht festgelegt werden".to_string(),
+        }
+    }
+
+    // ── Unmount (eject-diagnose) ──
+
+    pub fn w_unmounted(self, dev: &str) -> String {
+        match self {
+            Lang::EnUs => format!("Mount of `{dev}` released"),
+            Lang::NlNl => format!("Aankoppeling van `{dev}` is opgeheven"),
+            Lang::DeDe => format!("Einhängung von `{dev}` wurde gelöst"),
+        }
+    }
+
+    pub fn w_unmount_failed(self, dev: &str, err: &str) -> String {
+        match self {
+            Lang::EnUs => format!("Unmount of `{dev}` failed: {err}"),
+            Lang::NlNl => format!("Unmount van `{dev}` mislukt: {err}"),
+            Lang::DeDe => format!("Aushängen von `{dev}` fehlgeschlagen: {err}"),
+        }
+    }
+
+    pub fn w_unmount_unavailable(self, e: &str) -> String {
+        match self {
+            Lang::EnUs => format!("`udisksctl` not available for unmount: {e}"),
+            Lang::NlNl => format!("`udisksctl` niet beschikbaar voor unmount: {e}"),
+            Lang::DeDe => format!("`udisksctl` nicht verfügbar zum Aushängen: {e}"),
+        }
+    }
+
+    // ── Wissen ──
+
+    pub fn w_erase_no_lib(self) -> String {
+        match self {
+            Lang::EnUs => "Erase requested, but libburn is not loaded".to_string(),
+            Lang::NlNl => "Wissen aangevraagd, maar libburn is niet geladen".to_string(),
+            Lang::DeDe => "Löschen angefragt, aber libburn ist nicht geladen".to_string(),
+        }
+    }
+
+    pub fn w_erase_unknown(self, index: usize) -> String {
+        match self {
+            Lang::EnUs => format!("Erase requested for unknown drive {index}"),
+            Lang::NlNl => format!("Wissen aangevraagd voor onbekend station {index}"),
+            Lang::DeDe => format!("Löschen für unbekanntes Laufwerk {index} angefragt"),
+        }
+    }
+
+    pub fn w_erase_starting(self, index: usize, fast: bool) -> String {
+        let mode = match (self, fast) {
+            (Lang::EnUs, true) => "quick",
+            (Lang::EnUs, false) => "full",
+            (Lang::NlNl, true) => "snel",
+            (Lang::NlNl, false) => "volledig",
+            (Lang::DeDe, true) => "schnell",
+            (Lang::DeDe, false) => "vollständig",
+        };
+        match self {
+            Lang::EnUs => format!("Drive {index}: erasing media ({mode})…"),
+            Lang::NlNl => format!("Station {index}: media wissen ({mode})…"),
+            Lang::DeDe => format!("Laufwerk {index}: Medium wird gelöscht ({mode})…"),
+        }
+    }
+
+    pub fn w_erase_overwritable(self, profile_no: i32) -> String {
+        match self {
+            Lang::EnUs => format!(
+                "Media (profile 0x{profile_no:02X}) is directly overwritable — erasing is not \
+                 needed; use the “Restore attempt” to restore the disc"
+            ),
+            Lang::NlNl => format!(
+                "Media (profiel 0x{profile_no:02X}) is direct overschrijfbaar — wissen is niet \
+                 nodig; gebruik de “Herstelpoging” om de schijf te herstellen"
+            ),
+            Lang::DeDe => format!(
+                "Medium (Profil 0x{profile_no:02X}) ist direkt wiederbeschreibbar — Löschen ist \
+                 nicht nötig; verwende den „Herstellungsversuch“, um die Disc wiederherzustellen"
+            ),
+        }
+    }
+
+    pub fn w_erase_not_rewritable(self) -> String {
+        match self {
+            Lang::EnUs => "This media is not rewritable — erasing is not possible".to_string(),
+            Lang::NlNl => {
+                "Deze media is niet herbeschrijfbaar — wissen is niet mogelijk".to_string()
+            }
+            Lang::DeDe => {
+                "Dieses Medium ist nicht wiederbeschreibbar — Löschen ist nicht möglich".to_string()
+            }
+        }
+    }
+
+    // ── Herstelpoging (format) ──
+
+    pub fn w_restore_no_lib(self) -> String {
+        match self {
+            Lang::EnUs => "Restore attempt requested, but libburn is not loaded".to_string(),
+            Lang::NlNl => "Herstelpoging aangevraagd, maar libburn is niet geladen".to_string(),
+            Lang::DeDe => {
+                "Herstellungsversuch angefragt, aber libburn ist nicht geladen".to_string()
+            }
+        }
+    }
+
+    pub fn w_restore_unknown(self, index: usize) -> String {
+        match self {
+            Lang::EnUs => format!("Restore attempt requested for unknown drive {index}"),
+            Lang::NlNl => format!("Herstelpoging aangevraagd voor onbekend station {index}"),
+            Lang::DeDe => format!("Herstellungsversuch für unbekanntes Laufwerk {index} angefragt"),
+        }
+    }
+
+    pub fn w_restore_default_size(self) -> String {
+        match self {
+            Lang::EnUs => "Restore attempt: default size…".to_string(),
+            Lang::NlNl => "Herstelpoging: standaardgrootte…".to_string(),
+            Lang::DeDe => "Herstellungsversuch: Standardgröße…".to_string(),
+        }
+    }
+
+    pub fn w_restore_not_applicable(self, profile_no: i32) -> String {
+        match self {
+            Lang::EnUs => format!(
+                "Restore attempt does not apply to this media (profile 0x{profile_no:02X}) — \
+                 for CD-RW/DVD-RW sequential, “Erase” is the right action"
+            ),
+            Lang::NlNl => format!(
+                "Herstelpoging is niet van toepassing op deze media (profiel 0x{profile_no:02X}) \
+                 — voor CD-RW/DVD-RW sequentieel is “Wissen” de juiste actie"
+            ),
+            Lang::DeDe => format!(
+                "Herstellungsversuch trifft auf dieses Medium nicht zu (Profil 0x{profile_no:02X}) \
+                 — bei CD-RW/DVD-RW sequential ist „Löschen“ die richtige Aktion"
+            ),
+        }
+    }
+
+    pub fn w_restore_no_dm_type(self) -> String {
+        match self {
+            Lang::EnUs => "The drive does not offer format type 0x31 (BD-RE without defect \
+                 management) — libburn will refuse that format; turn off ‘Disable defect \
+                 management’"
+                .to_string(),
+            Lang::NlNl => "De drive biedt geen format-type 0x31 (BD-RE zonder defect \
+                 management) aan — libburn weigert dit format dan; zet \
+                 ‘Defect management uitschakelen’ uit"
+                .to_string(),
+            Lang::DeDe => "Das Laufwerk bietet keinen Formattyp 0x31 (BD-RE ohne Defect \
+                 Management) an — libburn wird dieses Format ablehnen; schalte \
+                 „Defect Management deaktivieren“ aus"
+                .to_string(),
+        }
+    }
+
+    pub fn w_restore_dm_off(self) -> String {
+        match self {
+            Lang::EnUs => "Defect management will be disabled for this restore attempt — faster burning, but bad blocks are no longer remapped".to_string(),
+            Lang::NlNl => "Defect management wordt bij deze herstelpoging uitgeschakeld — sneller branden, maar slechte blokken worden niet meer hermapd".to_string(),
+            Lang::DeDe => "Defect Management wird bei diesem Herstellungsversuch deaktiviert — schnelleres Brennen, aber schlechte Blöcke werden nicht mehr remappt".to_string(),
+        }
+    }
+
+    pub fn w_restore_cert_skip(self) -> String {
+        match self {
+            Lang::EnUs => "Certification will be skipped — libburn chooses format type 0x00 without certification (quick format)".to_string(),
+            Lang::NlNl => "Certificatie wordt overgeslagen — libburn kiest format-type 0x00 zonder certificatie (snelformat)".to_string(),
+            Lang::DeDe => "Zertifizierung wird übersprungen — libburn wählt Formattyp 0x00 ohne Zertifizierung (Schnellformat)".to_string(),
+        }
+    }
+
+    pub fn w_restore_running(self) -> String {
+        match self {
+            Lang::EnUs => "Restore attempt: the media is being re-formatted; this can take several minutes…".to_string(),
+            Lang::NlNl => "Herstelpoging: de media wordt opnieuw geformatteerd; dit kan enkele minuten duren…".to_string(),
+            Lang::DeDe => "Herstellungsversuch: das Medium wird neu formatiert; das kann einige Minuten dauern…".to_string(),
+        }
+    }
+
+    // ── Schijfkopie lezen ──
+
+    pub fn w_read_no_lib(self) -> String {
+        match self {
+            Lang::EnUs => "Copy requested, but libburn is not loaded".to_string(),
+            Lang::NlNl => "Kopie aangevraagd, maar libburn is niet geladen".to_string(),
+            Lang::DeDe => "Kopie angefragt, aber libburn ist nicht geladen".to_string(),
+        }
+    }
+
+    pub fn w_read_unknown(self, index: usize) -> String {
+        match self {
+            Lang::EnUs => format!("Copy requested for unknown drive {index}"),
+            Lang::NlNl => format!("Kopie aangevraagd voor onbekend station {index}"),
+            Lang::DeDe => format!("Kopie für unbekanntes Laufwerk {index} angefragt"),
+        }
+    }
+
+    pub fn w_read_no_path(self) -> String {
+        match self {
+            Lang::EnUs => "Copy requested without an output file".to_string(),
+            Lang::NlNl => "Kopie aangevraagd zonder uitvoerbestand".to_string(),
+            Lang::DeDe => "Kopie ohne Ausgabedatei angefragt".to_string(),
+        }
+    }
+
+    /// Prefix "Station 0" / "Drive 0" / "Laufwerk 0" voor logregels die een
+    /// extern opgebouwde melding voorgaan.
+    pub fn w_station(self, index: usize) -> String {
+        format!("{} {index}", self.texts().drives.unnamed_prefix)
+    }
+
+    pub fn w_read_start(self, index: usize, path: &str) -> String {
+        match self {
+            Lang::EnUs => format!("Drive {index}: starting disc copy to `{path}`…"),
+            Lang::NlNl => format!("Station {index}: schijfkopie starten naar `{path}`…"),
+            Lang::DeDe => format!("Laufwerk {index}: Disc-Kopie starten nach `{path}`…"),
+        }
+    }
+
+    pub fn w_read_exists(self, path: &str) -> String {
+        match self {
+            Lang::EnUs => format!("Output file already exists: `{path}` — choose a different name"),
+            Lang::NlNl => format!("Uitvoerbestand bestaat al: `{path}` — kies een andere naam"),
+            Lang::DeDe => {
+                format!("Ausgabedatei existiert bereits: `{path}` — wähle einen anderen Namen")
+            }
+        }
+    }
+
+    pub fn w_read_no_capacity(self) -> String {
+        match self {
+            Lang::EnUs => "No readable capacity — media blank or not data media (CD audio is not yet supported)".to_string(),
+            Lang::NlNl => "Geen leesbare capaciteit — media leeg of geen datamedia (CD-audio wordt nog niet ondersteund)".to_string(),
+            Lang::DeDe => "Keine lesbare Kapazität — Medium leer oder kein Datenmedium (CD-Audio wird noch nicht unterstützt)".to_string(),
+        }
+    }
+
+    pub fn w_read_blocks(self, index: usize, blocks: i64, size: &str) -> String {
+        match self {
+            Lang::EnUs => format!("Drive {index}: reading {blocks} blocks (≈ {size})…"),
+            Lang::NlNl => format!("Station {index}: {blocks} blokken (≈ {size}) lezen…"),
+            Lang::DeDe => format!("Laufwerk {index}: {blocks} Blöcke (≈ {size}) lesen…"),
+        }
+    }
+
+    pub fn w_read_create_failed(self, path: &str, err: &str) -> String {
+        match self {
+            Lang::EnUs => format!("Cannot create `{path}`: {err}"),
+            Lang::NlNl => format!("Kan `{path}` niet aanmaken: {err}"),
+            Lang::DeDe => format!("`{path}` konnte nicht erstellt werden: {err}"),
+        }
+    }
+
+    pub fn w_read_cancelled(self, index: usize, blocks: i64, path: &str) -> String {
+        match self {
+            Lang::EnUs => format!(
+                "Drive {index}: copy cancelled after {blocks} blocks; `{path}` is left (incomplete)"
+            ),
+            Lang::NlNl => format!(
+                "Station {index}: kopie geannuleerd na {blocks} blokken; `{path}` blijft (onvolledig) staan"
+            ),
+            Lang::DeDe => format!(
+                "Laufwerk {index}: Kopie nach {blocks} Blöcken abgebrochen; `{path}` bleibt (unvollständig) stehen"
+            ),
+        }
+    }
+
+    pub fn w_read_error(self, index: usize, err: &str) -> String {
+        match self {
+            Lang::EnUs => format!("Drive {index}: {err}"),
+            Lang::NlNl => format!("Station {index}: {err}"),
+            Lang::DeDe => format!("Laufwerk {index}: {err}"),
+        }
+    }
+
+    pub fn w_read_done(self, index: usize, blocks: i64, size: &str, path: &str) -> String {
+        match self {
+            Lang::EnUs => format!("Drive {index}: disc copy done — {blocks} ({size}) → `{path}`"),
+            Lang::NlNl => {
+                format!("Station {index}: schijfkopie klaar — {blocks} ({size}) → `{path}`")
+            }
+            Lang::DeDe => {
+                format!("Laufwerk {index}: Disc-Kopie fertig — {blocks} ({size}) → `{path}`")
+            }
+        }
+    }
+}

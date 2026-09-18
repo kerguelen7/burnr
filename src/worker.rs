@@ -259,7 +259,7 @@ pub enum Event {
         buffer_pct: f32,
         fifo_pct: f32,
         /// Huidige fase (bijv. "schrijven", "track afsluiten") voor de UI.
-        phase: String,
+        phase: DriveStatus,
         /// Verstreken tijd in seconden.
         elapsed_secs: f64,
         /// Verwachte resterende tijd in seconden (0 = onbekend).
@@ -443,55 +443,38 @@ fn run(cmds: Receiver<Command>, events: Sender<Event>, ctx: egui::Context) {
                     if active.is_empty() {
                         load_library(&mut state, path, exclusive, lang, &notify);
                     } else {
-                        notify.log(
-                            Level::Warning,
-                            "Herladen is niet mogelijk tijdens actieve jobs",
-                        );
+                        notify.log(Level::Warning, lang.w_reload_busy());
                     }
                 }
                 Command::Scan => {
                     if active.is_empty() {
-                        scan(&mut state, &cmds, &mut pending, &notify);
+                        scan(&mut state, lang, &cmds, &mut pending, &notify);
                     } else {
-                        notify.log(
-                            Level::Warning,
-                            "Scannen is niet mogelijk tijdens actieve jobs",
-                        );
+                        notify.log(Level::Warning, lang.w_scan_busy());
                     }
                 }
                 Command::InspectDrive(index) => {
                     if active.iter().any(|j| j.index == index) {
-                        notify.log(
-                            Level::Warning,
-                            format!(
-                                "Station {index} is bezig met een job — inspectie overgeslagen"
-                            ),
-                        );
+                        notify.log(Level::Warning, lang.w_inspect_busy_job(index));
                     } else {
-                        inspect(state.as_ref(), index, &notify);
+                        inspect(state.as_ref(), lang, index, &notify);
                     }
                 }
                 Command::ReadDisc { index, path } => {
                     if !active.is_empty() {
-                        notify.log(
-                            Level::Warning,
-                            "Lezen is niet mogelijk tijdens actieve jobs",
-                        );
+                        notify.log(Level::Warning, lang.w_read_busy());
                     } else {
-                        read_disc(&state, index, &path, &cmds, &mut pending, &notify)
+                        read_disc(&state, lang, index, &path, &cmds, &mut pending, &notify)
                     }
                 }
                 Command::CancelRead => {
-                    notify.log(
-                        Level::Warning,
-                        "Annuleren gevraagd, maar er is geen kopie bezig",
-                    );
+                    notify.log(Level::Warning, lang.w_cancel_no_read());
                 }
                 Command::BurnDisc {
                     index,
                     path,
                     settings,
-                } => burn_job(&state, index, &path, &settings, &mut active, &notify),
+                } => burn_job(&state, lang, index, &path, &settings, &mut active, &notify),
                 Command::BurnFiles {
                     index,
                     paths,
@@ -500,6 +483,7 @@ fn run(cmds: Receiver<Command>, events: Sender<Event>, ctx: egui::Context) {
                     import_start_block,
                 } => burn_files_job(
                     &state,
+                    lang,
                     index,
                     &paths,
                     &volume_id,
@@ -513,23 +497,17 @@ fn run(cmds: Receiver<Command>, events: Sender<Event>, ctx: egui::Context) {
                         if let Some(job) = active.iter_mut().find(|j| j.index == index) {
                             unsafe { (st.raw.drive_cancel)(job.drive) };
                             job.cancelled = true;
-                            notify.log(
-                                Level::Info,
-                                format!("Annuleren gevraagd voor station {index}"),
-                            );
+                            notify.log(Level::Info, lang.w_cancel_requested(index));
                         } else {
-                            notify.log(
-                                Level::Warning,
-                                format!("Geen actieve job op station {index}"),
-                            );
+                            notify.log(Level::Warning, lang.w_cancel_no_job(index));
                         }
                     }
                 }
                 Command::EraseDisc { index, fast } => {
-                    erase_job(&state, index, fast, &mut active, &notify)
+                    erase_job(&state, lang, index, fast, &mut active, &notify)
                 }
                 Command::FormatDisc { index, settings } => {
-                    format_job(&state, index, &settings, &mut active, &notify)
+                    format_job(&state, lang, index, &settings, &mut active, &notify)
                 }
                 Command::Shutdown => {
                     shutdown = true;
@@ -569,7 +547,7 @@ fn run(cmds: Receiver<Command>, events: Sender<Event>, ctx: egui::Context) {
         }
     }
 
-    shutdown_lib(state, &notify);
+    shutdown_lib(state, lang, &notify);
     let _ = events.send(Event::WorkerStopped);
 }
 
@@ -581,7 +559,7 @@ fn load_library(
     notify: &Notifier,
 ) {
     // Een eventueel eerdere sessie netjes afsluiten.
-    shutdown_lib(state.take(), notify);
+    shutdown_lib(state.take(), lang, notify);
 
     let candidates: Vec<String> = match custom {
         Some(p) => vec![p],
@@ -603,7 +581,7 @@ fn load_library(
         match RawLibburn::load(cand) {
             Ok(raw) => unsafe {
                 if (raw.initialize)() == 0 {
-                    last_err = format!("`{cand}`: burn_initialize() mislukte");
+                    last_err = lang.w_burn_init_failed(cand);
                     continue;
                 }
                 // Apparaat-openingsbeleid (vlak na initialize, vóór de scan):
@@ -620,31 +598,18 @@ fn load_library(
                     c"NEVER".as_ptr(),
                     c"burnr: ".as_ptr(),
                 );
-                notify.log(
-                    Level::Info,
-                    format!(
-                        "Apparaat-openingsmodus: {}",
-                        if exclusive {
-                            "exclusief (O_EXCL)"
-                        } else {
-                            "niet-exclusief (geschikt bij automount)"
-                        }
-                    ),
-                );
+                notify.log(Level::Info, lang.w_device_open_mode(exclusive));
                 let (mut maj, mut min, mut mic) = (0, 0, 0);
                 (raw.version)(&mut maj, &mut min, &mut mic);
                 let version = format!("{maj}.{min}.{mic}");
-                notify.log(
-                    Level::Success,
-                    format!("libburn {version} geladen via `{cand}`"),
-                );
+                notify.log(Level::Success, lang.w_lib_loaded(&version, cand));
                 notify.send(Event::LibLoaded {
                     version,
                     path: cand.clone(),
                 });
                 // libisofs erbij laden (optioneel — alleen nodig voor
                 // “bestanden samenstellen”; ISO-branden werkt ook zonder).
-                let isofs = load_isofs(notify);
+                let isofs = load_isofs(lang, notify);
                 *state = Some(WorkerState {
                     raw,
                     isofs,
@@ -658,21 +623,19 @@ fn load_library(
         }
     }
 
-    notify.log(Level::Error, format!("libburn niet geladen — {last_err}"));
+    notify.log(Level::Error, lang.w_lib_failed(&last_err));
     notify.send(Event::LibLoadFailed { error: last_err });
 }
 
 fn scan(
     state: &mut Option<WorkerState>,
+    lang: Lang,
     cmds: &Receiver<Command>,
     pending: &mut VecDeque<Command>,
     notify: &Notifier,
 ) {
     let Some(st) = state.as_mut() else {
-        notify.log(
-            Level::Warning,
-            "Scan aangevraagd, maar libburn is niet geladen",
-        );
+        notify.log(Level::Warning, lang.w_scan_no_lib());
         return;
     };
 
@@ -680,7 +643,7 @@ fn scan(
     // nieuwe scan (alle pointers worden ongeldig).
     free_drive_list(st);
 
-    notify.log(Level::Info, "Scannen naar schijfstations…");
+    notify.log(Level::Info, lang.w_scanning());
     notify.send(Event::ScanStarted);
 
     let mut infos: *mut DriveInfo = std::ptr::null_mut();
@@ -712,7 +675,7 @@ fn scan(
     match outcome {
         Outcome::Aborted => return,
         Outcome::Done(ret) if ret < 0 => {
-            let msg = format!("Scan mislukt (libburn-foutcode {ret})");
+            let msg = lang.w_scan_failed(ret);
             notify.log(Level::Error, msg.clone());
             notify.send(Event::ScanFailed { error: msg });
             return;
@@ -734,10 +697,7 @@ fn scan(
     st.infos = infos;
     st.n_drives = count;
 
-    notify.log(
-        Level::Success,
-        format!("Scan voltooid: {count} station(s) gevonden"),
-    );
+    notify.log(Level::Success, lang.w_scan_done(count));
     notify.send(Event::ScanDone { drives });
 }
 
@@ -810,19 +770,13 @@ unsafe fn adr_of(di: &DriveInfo, raw: &RawLibburn) -> String {
     }
 }
 
-fn inspect(state: Option<&WorkerState>, index: usize, notify: &Notifier) {
+fn inspect(state: Option<&WorkerState>, lang: Lang, index: usize, notify: &Notifier) {
     let Some(st) = state else {
-        notify.log(
-            Level::Warning,
-            "Inspectie aangevraagd, maar libburn is niet geladen",
-        );
+        notify.log(Level::Warning, lang.w_inspect_no_lib());
         return;
     };
     if st.infos.is_null() || index >= st.n_drives {
-        notify.log(
-            Level::Warning,
-            format!("Inspectie aangevraagd voor onbekend station {index}"),
-        );
+        notify.log(Level::Warning, lang.w_inspect_unknown(index));
         return;
     }
 
@@ -835,31 +789,17 @@ fn inspect(state: Option<&WorkerState>, index: usize, notify: &Notifier) {
     )
     .trim()
     .to_string();
-    notify.log(Level::Info, format!("Station {index} ({name}): grabben…"));
+    notify.log(Level::Info, lang.w_inspect_grab(index, &name));
 
     let grabbed = unsafe { (st.raw.drive_grab)(di.drive, 0) } == 1;
     if !grabbed {
         let adr = unsafe { adr_of(&di, &st.raw) };
-        let msg = format!(
-            "Grab mislukt voor {} — drive mogelijk bezet. Mogelijke oorzaak: de schijf is \
-             door de bestandsbeheerder aangekoppeld (automount). Los dit op met \
-             `udisksctl unmount -b {adr}` of zet “Exclusief openen” uit \
-             (Instellingen → Apparaat).",
-            if adr.is_empty() {
-                format!("station {index}")
-            } else {
-                adr.clone()
-            },
-            adr = if adr.is_empty() { "/dev/srX" } else { &adr },
-        );
-        notify.log(Level::Error, format!("Station {index}: {msg}"));
+        let msg = lang.w_grab_failed(index, &adr);
+        notify.log(Level::Error, msg.clone());
         notify.send(Event::InspectFailed { index, error: msg });
         return;
     }
-    notify.log(
-        Level::Info,
-        format!("Station {index}: grab gelukt; media-status bepalen…"),
-    );
+    notify.log(Level::Info, lang.w_inspect_grabbed(index));
 
     // burn_disc_get_status geeft UNREADY terug zolang de drive nog bezig is;
     // een paar keer pollen met korte pauzes (max. ~2 s).
@@ -871,10 +811,7 @@ fn inspect(state: Option<&WorkerState>, index: usize, notify: &Notifier) {
         }
         thread::sleep(Duration::from_millis(50));
     }
-    notify.log(
-        Level::Info,
-        format!("Station {index}: media = {}", disc_label(disc)),
-    );
+    notify.log(Level::Info, lang.w_inspect_media(index, disc));
 
     // Stap 2: profiel (mediatype) opvragen.
     let mut profile_no: c_int = 0;
@@ -894,10 +831,7 @@ fn inspect(state: Option<&WorkerState>, index: usize, notify: &Notifier) {
     if !profile_name.is_empty() {
         notify.log(
             Level::Info,
-            format!(
-                "Station {index}: mediatype = {} (profiel 0x{:02X})",
-                profile_name, profile_no
-            ),
+            lang.w_inspect_profile(index, &profile_name, profile_no),
         );
     }
 
@@ -914,10 +848,7 @@ fn inspect(state: Option<&WorkerState>, index: usize, notify: &Notifier) {
     if let Some(blocks) = read_capacity {
         notify.log(
             Level::Info,
-            format!(
-                "Station {index}: leesbare capaciteit ≈ {}",
-                format_blocks(blocks)
-            ),
+            lang.w_inspect_capacity(index, &format_blocks(blocks)),
         );
     }
 
@@ -971,13 +902,9 @@ fn inspect(state: Option<&WorkerState>, index: usize, notify: &Notifier) {
                 };
 
                 if let Some(pid) = &product_id {
-                    let manu_part = manuf
-                        .as_ref()
-                        .map(|m| format!(" — {m}"))
-                        .unwrap_or_default();
                     notify.log(
                         Level::Info,
-                        format!("Station {index}: mediacode = {pid}{manu_part}"),
+                        lang.w_inspect_media_code(index, pid, manuf.as_deref().unwrap_or("")),
                     );
                 }
                 media_id = Some(MediaId {
@@ -997,17 +924,9 @@ fn inspect(state: Option<&WorkerState>, index: usize, notify: &Notifier) {
                 let r = (st.raw.disc_get_bd_spare_info)(di.drive, &mut alloc, &mut free_b, 0);
                 if r == 1 && alloc > 0 {
                     bd_spare = Some((alloc, free_b));
-                    notify.log(
-                        Level::Info,
-                        format!(
-                            "Station {index}: defect management actief — spare vrij {free_b} van {alloc} blokken"
-                        ),
-                    );
+                    notify.log(Level::Info, lang.w_inspect_dm_active(index, free_b, alloc));
                 } else {
-                    notify.log(
-                        Level::Info,
-                        "Geen BD spare-info — defect management niet actief",
-                    );
+                    notify.log(Level::Info, lang.w_inspect_dm_off());
                 }
             }
         }
@@ -1020,11 +939,7 @@ fn inspect(state: Option<&WorkerState>, index: usize, notify: &Notifier) {
         let total_tracks: usize = sessions.iter().map(|s| s.tracks.len()).sum();
         notify.log(
             Level::Info,
-            format!(
-                "Station {index}: TOC gelezen — {} sessie(s), {} track(s)",
-                sessions.len(),
-                total_tracks
-            ),
+            lang.w_inspect_toc(index, sessions.len(), total_tracks),
         );
     }
 
@@ -1048,10 +963,7 @@ fn inspect(state: Option<&WorkerState>, index: usize, notify: &Notifier) {
             p = d.next;
         }
         unsafe { (st.raw.drive_free_speedlist)(&mut list) };
-        notify.log(
-            Level::Info,
-            format!("Station {index}: {} snelheid(s) gelezen", speeds.len()),
-        );
+        notify.log(Level::Info, lang.w_inspect_speeds(index, speeds.len()));
     }
 
     let mut prog = Progress::default();
@@ -1059,10 +971,7 @@ fn inspect(state: Option<&WorkerState>, index: usize, notify: &Notifier) {
         DriveStatus::from_raw(unsafe { (st.raw.drive_get_status)(di.drive, &mut prog) });
 
     unsafe { (st.raw.drive_release)(di.drive, 0) };
-    notify.log(
-        Level::Success,
-        format!("Station {index}: inspectie klaar, station vrijgegeven"),
-    );
+    notify.log(Level::Success, lang.w_inspect_done(index));
     notify.send(Event::InspectDone {
         index,
         media: MediaInfo {
@@ -1213,6 +1122,7 @@ fn free_drive_list(st: &mut WorkerState) {
 /// burn_drive_cancel.
 fn burn_job(
     state: &Option<WorkerState>,
+    lang: Lang,
     index: usize,
     path: &str,
     s: &BurnSettings,
@@ -1222,32 +1132,22 @@ fn burn_job(
     use crate::settings::WriteMode;
 
     let Some(st) = state else {
-        notify.log(
-            Level::Warning,
-            "Branden aangevraagd, maar libburn is niet geladen",
-        );
+        notify.log(Level::Warning, lang.w_burn_no_lib());
         return;
     };
     if st.infos.is_null() || index >= st.n_drives {
-        notify.log(
-            Level::Warning,
-            format!("Branden aangevraagd voor onbekend station {index}"),
-        );
+        notify.log(Level::Warning, lang.w_burn_unknown(index));
         return;
     }
     let path = path.trim();
     if path.is_empty() {
-        notify.log(Level::Warning, "Branden aangevraagd zonder ISO-bestand");
+        notify.log(Level::Warning, lang.w_burn_no_iso());
         return;
     }
     if s.write_mode == WriteMode::Raw {
-        let msg = "Schrijfmodus RAW wordt niet ondersteund voor ISO-bestanden \
-                   (vereist 2352-byte brondata)";
-        notify.log(Level::Error, msg);
-        notify.send(Event::BurnFailed {
-            index,
-            error: msg.to_string(),
-        });
+        let msg = lang.w_raw_iso_unsupported();
+        notify.log(Level::Error, &msg);
+        notify.send(Event::BurnFailed { index, error: msg });
         return;
     }
 
@@ -1255,7 +1155,7 @@ fn burn_job(
     let meta = match std::fs::metadata(path) {
         Ok(m) => m,
         Err(e) => {
-            let msg = format!("Kan ISO-bestand `{path}` niet openen: {e}");
+            let msg = lang.w_burn_open_failed(path, &e.to_string());
             notify.log(Level::Error, &msg);
             notify.send(Event::BurnFailed { index, error: msg });
             return;
@@ -1263,37 +1163,24 @@ fn burn_job(
     };
     let file_size = meta.len();
     if file_size == 0 {
-        let msg = "ISO-bestand is leeg".to_string();
+        let msg = lang.w_empty_iso();
         notify.log(Level::Error, &msg);
         notify.send(Event::BurnFailed { index, error: msg });
         return;
     }
     if file_size % 2048 != 0 {
-        notify.log(
-            Level::Info,
-            "Bestandsgrootte is geen veelvoud van 2048 bytes; laatste sector wordt \
-             aangevuld met nullen",
-        );
+        notify.log(Level::Info, lang.w_padding_note());
     }
     let expected_sectors = ((file_size as i64 + 2047) / 2048) as i32;
 
     let di = unsafe { *st.infos.add(index) };
     notify.log(
         Level::Info,
-        format!(
-            "Station {index}: brandjob starten — `{path}` ({} blokken)",
-            expected_sectors
-        ),
+        lang.w_burn_starting(index, path, expected_sectors),
     );
     notify.log(
         Level::Info,
-        format!(
-            "Instellingen: simulatie={}, multi-session={}, padding={} KiB, overburn={}",
-            if s.simulate { "aan" } else { "uit" },
-            s.multi_session.short(),
-            s.padding_kib,
-            if s.overburn { "aan" } else { "uit" }
-        ),
+        lang.w_settings_line(s.simulate, s.multi_session, s.padding_kib, s.overburn, None),
     );
 
     // Grab + media-check (gedeelde flow).
@@ -1306,10 +1193,9 @@ fn burn_job(
     if avail >= 0 && (avail as i64) < file_size as i64 {
         notify.log(
             Level::Warning,
-            format!(
-                "ISO-bestand (≈ {}) lijkt groter dan de beschikbare ruimte (≈ {})",
-                format_blocks(((file_size as i64 + 2047) / 2048) as i32),
-                format_blocks(avail as i32)
+            lang.w_iso_size_warning(
+                &format_blocks(((file_size as i64 + 2047) / 2048) as i32),
+                &format_blocks(avail as i32),
             ),
         );
     }
@@ -1319,39 +1205,37 @@ fn burn_job(
     // media/drive toelaten.
     let write_speed = if s.speed_max { 0 } else { s.speed_kbps };
     unsafe { (st.raw.drive_set_speed)(di.drive, 0, write_speed) };
-    notify.log(
-        Level::Info,
-        format!(
-            "Snelheid: {}",
-            if s.speed_max {
-                "maximaal".to_string()
-            } else {
-                format!("maximaal {} kB/s", s.speed_kbps)
-            }
-        ),
-    );
+    notify.log(Level::Info, lang.w_speed(s.speed_max, s.speed_kbps));
 
     // Disc-model: disc → session → track met file-bron + FIFO.
     let path_c = match std::ffi::CString::new(path) {
         Ok(c) => c,
         Err(_) => {
-            let msg = "Ongeldig pad (bevat NUL-byte)".to_string();
+            let msg = lang.w_bad_path_nul();
             notify.log(Level::Error, &msg);
             unsafe { (st.raw.drive_release)(di.drive, 0) };
             notify.send(Event::BurnFailed { index, error: msg });
             return;
         }
     };
-    let (disc, session, track, fifo, opts) =
-        match unsafe { build_burn_model(&st.raw, di.drive, path_c.as_ptr(), file_size, s, notify) }
-        {
-            Ok(model) => model,
-            Err(msg) => {
-                unsafe { (st.raw.drive_release)(di.drive, 0) };
-                notify.send(Event::BurnFailed { index, error: msg });
-                return;
-            }
-        };
+    let (disc, session, track, fifo, opts) = match unsafe {
+        build_burn_model(
+            &st.raw,
+            di.drive,
+            path_c.as_ptr(),
+            file_size,
+            s,
+            st.lang,
+            notify,
+        )
+    } {
+        Ok(model) => model,
+        Err(msg) => {
+            unsafe { (st.raw.drive_release)(di.drive, 0) };
+            notify.send(Event::BurnFailed { index, error: msg });
+            return;
+        }
+    };
 
     // Branden starten (asynchroon — libburn draait de job in eigen threads);
     // de job wordt aan de actieve lijst toegevoegd en door de hoofdlus gepolld.
@@ -1361,17 +1245,7 @@ fn burn_job(
         total_sectors: expected_sectors,
         simulate: s.simulate,
     });
-    notify.log(
-        Level::Info,
-        format!(
-            "Station {index}: branden gestart{}…",
-            if s.simulate {
-                " (SIMULATIE — laser uit)"
-            } else {
-                ""
-            }
-        ),
-    );
+    notify.log(Level::Info, lang.w_burn_started(index, s.simulate));
     let adr = unsafe { adr_of(&di, &st.raw) };
     active.push(ActiveJob {
         index,
@@ -1407,6 +1281,7 @@ fn burn_job(
 #[allow(clippy::too_many_arguments)]
 fn burn_files_job(
     state: &Option<WorkerState>,
+    lang: Lang,
     index: usize,
     paths: &[String],
     volume_id: &str,
@@ -1418,39 +1293,32 @@ fn burn_files_job(
     use crate::settings::WriteMode;
 
     let Some(st) = state else {
-        notify.log(
-            Level::Warning,
-            "Branden aangevraagd, maar libburn is niet geladen",
-        );
+        notify.log(Level::Warning, lang.w_burn_no_lib());
         return;
     };
     if st.infos.is_null() || index >= st.n_drives {
-        notify.log(
-            Level::Warning,
-            format!("Branden aangevraagd voor onbekend station {index}"),
-        );
+        notify.log(Level::Warning, lang.w_burn_unknown(index));
         return;
     }
     let Some(iso) = st.isofs.as_ref() else {
-        let msg =
-            "libisofs is niet geladen — bestanden samenstellen is niet beschikbaar".to_string();
+        let msg = lang.w_isofs_missing();
         notify.log(Level::Error, &msg);
         notify.send(Event::BurnFailed { index, error: msg });
         return;
     };
     if paths.is_empty() {
-        notify.log(Level::Warning, "Geen bestanden gekozen om te branden");
+        notify.log(Level::Warning, lang.w_burn_no_files());
         return;
     }
     if s.write_mode == WriteMode::Raw {
-        let msg = "Schrijfmodus RAW wordt niet ondersteund voor data-images".to_string();
+        let msg = lang.w_raw_data_unsupported();
         notify.log(Level::Error, &msg);
         notify.send(Event::BurnFailed { index, error: msg });
         return;
     }
     for p in paths {
         if !std::path::Path::new(p).exists() {
-            let msg = format!("Bestand/map bestaat niet: `{p}`");
+            let msg = lang.w_burn_file_missing(p);
             notify.log(Level::Error, &msg);
             notify.send(Event::BurnFailed { index, error: msg });
             return;
@@ -1459,27 +1327,15 @@ fn burn_files_job(
 
     let di = unsafe { *st.infos.add(index) };
     let adr = unsafe { adr_of(&di, &st.raw) };
+    notify.log(Level::Info, lang.w_data_image_starting(index, paths.len()));
     notify.log(
         Level::Info,
-        format!(
-            "Station {index}: data-image samenstellen uit {} item(s)…",
-            paths.len()
-        ),
-    );
-    notify.log(
-        Level::Info,
-        format!(
-            "Instellingen: simulatie={}, multi-session={}, padding={} KiB, \
-             overburn={}, tijdstempels={}",
-            if s.simulate { "aan" } else { "uit" },
-            s.multi_session.short(),
+        lang.w_settings_line(
+            s.simulate,
+            s.multi_session,
             s.padding_kib,
-            if s.overburn { "aan" } else { "uit" },
-            if s.keep_timestamps {
-                "behouden"
-            } else {
-                "opnametijd"
-            }
+            s.overburn,
+            Some(s.keep_timestamps),
         ),
     );
 
@@ -1495,7 +1351,7 @@ fn burn_files_job(
     let vol_c = match std::ffi::CString::new(vol.as_str()) {
         Ok(c) => c,
         Err(_) => {
-            let msg = "Ongeldige volumenaam (bevat NUL-byte)".to_string();
+            let msg = lang.w_bad_volume_nul();
             notify.log(Level::Error, &msg);
             notify.send(Event::BurnFailed { index, error: msg });
             return;
@@ -1504,7 +1360,7 @@ fn burn_files_job(
     let image = unsafe {
         let mut image: *mut crate::isofs::IsoImage = std::ptr::null_mut();
         if (iso.image_new)(vol_c.as_ptr(), &mut image) != ISO_SUCCESS || image.is_null() {
-            let msg = "Kan de ISO-image niet aanmaken".to_string();
+            let msg = lang.w_image_create_failed();
             notify.log(Level::Error, &msg);
             notify.send(Event::BurnFailed { index, error: msg });
             return;
@@ -1517,17 +1373,11 @@ fn burn_files_job(
     // wordt tijdens het branden van de schijf gelezen.
     let mut data_src: *mut crate::isofs::IsoDataSource = std::ptr::null_mut();
     if let Some(start_block) = import_start_block {
-        notify.log(
-            Level::Info,
-            format!(
-                "Bestaande sessie (begin LBA {start_block}) wordt geïmporteerd — \
-                 nieuwe bestanden komen bij de bestaande inhoud…"
-            ),
-        );
+        notify.log(Level::Info, lang.w_import_start(start_block));
         let dev_c = match std::ffi::CString::new(adr.as_str()) {
             Ok(c) => c,
             Err(_) => {
-                let msg = "Ongeldig apparaatpad (bevat NUL-byte)".to_string();
+                let msg = lang.w_bad_dev_nul();
                 notify.log(Level::Error, &msg);
                 unsafe { (iso.image_unref)(image) };
                 notify.send(Event::BurnFailed { index, error: msg });
@@ -1539,7 +1389,7 @@ fn burn_files_job(
             if (iso.data_source_new_from_file)(dev_c.as_ptr(), &mut ds) != ISO_SUCCESS
                 || ds.is_null()
             {
-                let msg = "Kan de schijf niet als leesbron openen".to_string();
+                let msg = lang.w_import_open_failed();
                 notify.log(Level::Error, &msg);
                 (iso.image_unref)(image);
                 notify.send(Event::BurnFailed { index, error: msg });
@@ -1547,7 +1397,7 @@ fn burn_files_job(
             }
             let mut ropts: *mut crate::isofs::IsoReadOpts = std::ptr::null_mut();
             if (iso.read_opts_new)(&mut ropts, 0) != ISO_SUCCESS || ropts.is_null() {
-                let msg = "Kan de lees-opties niet aanmaken".to_string();
+                let msg = lang.w_read_opts_failed();
                 notify.log(Level::Error, &msg);
                 (iso.data_source_unref)(ds);
                 (iso.image_unref)(image);
@@ -1561,19 +1411,14 @@ fn burn_files_job(
                 let blocks = (iso.read_image_features_get_size)(features);
                 notify.log(
                     Level::Info,
-                    format!(
-                        "Bestaande sessie geïmporteerd: {blocks} blokken (≈ {})",
-                        format_blocks(blocks as i32)
-                    ),
+                    lang.w_import_done(blocks as i32, &format_blocks(blocks as i32)),
                 );
                 (iso.read_image_features_destroy)(features);
             }
             (iso.read_opts_free)(ropts);
             drain_iso_msgs(iso, notify);
             if r != ISO_SUCCESS {
-                let msg = "Importeren van de bestaande sessie mislukt — zie de \
-                           libisofs-meldingen"
-                    .to_string();
+                let msg = lang.w_import_failed();
                 notify.log(Level::Error, &msg);
                 (iso.data_source_unref)(ds);
                 (iso.image_unref)(image);
@@ -1631,7 +1476,7 @@ fn burn_files_job(
                 if r < 0 {
                     add_errors.push(format!("{p}: mapinhoud toevoegen mislukt (code {r})"));
                 } else {
-                    notify.log(Level::Info, format!("Toegevoegd: {p} (map, recursief)"));
+                    notify.log(Level::Info, lang.w_added_folder(p));
                 }
             } else {
                 // NB: retourwaarde = aantal nodes in parent bij succes, < 0 = fout.
@@ -1646,17 +1491,17 @@ fn burn_files_job(
                 if r < 0 {
                     add_errors.push(format!("{p}: toevoegen mislukt (code {r})"));
                 } else {
-                    notify.log(Level::Info, format!("Toegevoegd: {p} (bestand)"));
+                    notify.log(Level::Info, lang.w_added_file(p));
                 }
             }
         }
     }
     if !add_errors.is_empty() {
         for e in &add_errors {
-            notify.log(Level::Error, format!("Item overgeslagen: {e}"));
+            notify.log(Level::Error, lang.w_item_skipped(e));
         }
         if add_errors.len() == paths.len() {
-            let msg = "Geen enkel item kon aan de image worden toegevoegd".to_string();
+            let msg = lang.w_nothing_added();
             notify.log(Level::Error, &msg);
             unsafe { (iso.image_unref)(image) };
             notify.send(Event::BurnFailed { index, error: msg });
@@ -1676,17 +1521,7 @@ fn burn_files_job(
     // Snelheid: maximaal (0) of een door de user gekozen maximum (kB/s).
     let write_speed = if s.speed_max { 0 } else { s.speed_kbps };
     unsafe { (st.raw.drive_set_speed)(di.drive, 0, write_speed) };
-    notify.log(
-        Level::Info,
-        format!(
-            "Snelheid: {}",
-            if s.speed_max {
-                "maximaal".to_string()
-            } else {
-                format!("maximaal {} kB/s", s.speed_kbps)
-            }
-        ),
-    );
+    notify.log(Level::Info, lang.w_speed(s.speed_max, s.speed_kbps));
 
     // NWA: waar de nieuwe sessie begint (multi-session import).
     let (mut lba, mut nwa): (c_int, c_int) = (0, 0);
@@ -1694,23 +1529,21 @@ fn burn_files_job(
         (st.raw.disc_track_lba_nwa)(di.drive, std::ptr::null_mut(), 0, &mut lba, &mut nwa)
     } == 1;
     if import_start_block.is_some() && !nwa_ok {
-        let msg = "Kan de volgende schrijfadres (NWA) niet bepalen — \
-                   multi-session voortzetten mislukt"
-            .to_string();
+        let msg = lang.w_nwa_failed();
         notify.log(Level::Error, &msg);
         unsafe { (iso.image_unref)(image) };
         notify.send(Event::BurnFailed { index, error: msg });
         return;
     }
     if import_start_block.is_some() {
-        notify.log(Level::Info, format!("Nieuwe sessie begint op LBA {nwa}"));
+        notify.log(Level::Info, lang.w_nwa(nwa));
     }
 
     // libisofs write-opts: profiel 2 (DISTRIBUTION) = Rock Ridge + Joliet.
     let iso_opts = unsafe {
         let mut opts: *mut crate::isofs::IsoWriteOpts = std::ptr::null_mut();
         if (iso.write_opts_new)(&mut opts, 2) != ISO_SUCCESS || opts.is_null() {
-            let msg = "Kan de libisofs write-opts niet aanmaken".to_string();
+            let msg = lang.w_isofs_opts_failed();
             notify.log(Level::Error, &msg);
             (iso.image_unref)(image);
             notify.send(Event::BurnFailed { index, error: msg });
@@ -1738,13 +1571,13 @@ fn burn_files_job(
     };
 
     // Image-layout berekenen en burn_source opvragen (kan even duren).
-    notify.log(Level::Info, "Image-layout berekenen (kan even duren)…");
+    notify.log(Level::Info, lang.w_layout());
     let src_raw = unsafe {
         let mut src: *mut ffi::BurnSource = std::ptr::null_mut();
         let r = (iso.image_create_burn_source)(image, iso_opts, &mut src);
         drain_iso_msgs(iso, notify);
         if r != ISO_SUCCESS || src.is_null() {
-            let msg = "Samenstellen van de image mislukt — zie de libisofs-meldingen".to_string();
+            let msg = lang.w_compose_failed();
             notify.log(Level::Error, &msg);
             (iso.write_opts_free)(iso_opts);
             (iso.image_unref)(image);
@@ -1760,7 +1593,7 @@ fn burn_files_job(
     let fifo = unsafe { (st.raw.fifo_source_new)(src_raw, 2048, BURN_FIFO_CHUNKS, 0) };
     unsafe { (st.raw.source_free)(src_raw) }; // fifo heeft een eigen referentie
     if fifo.is_null() {
-        let msg = "Kan de FIFO om de image-bron niet aanmaken".to_string();
+        let msg = lang.w_fifo_failed();
         notify.log(Level::Error, &msg);
         unsafe {
             (iso.write_opts_free)(iso_opts);
@@ -1774,7 +1607,7 @@ fn burn_files_job(
     // Grootte via de get_size-callback van de burn_source.
     let size = unsafe { burn_source_get_size(src) };
     if size <= 0 {
-        let msg = "Imagegrootte onbekend — samenstellen afgebroken".to_string();
+        let msg = lang.w_size_unknown();
         notify.log(Level::Error, &msg);
         unsafe {
             (st.raw.source_free)(src);
@@ -1787,11 +1620,10 @@ fn burn_files_job(
     let expected_sectors = ((size + 2047) / 2048) as i32;
     notify.log(
         Level::Info,
-        format!(
-            "Image klaar: {} blokken (≈ {}) uit {} item(s)",
+        lang.w_image_ready(
             expected_sectors,
-            format_blocks(expected_sectors),
-            paths.len()
+            &format_blocks(expected_sectors),
+            paths.len(),
         ),
     );
 
@@ -1800,10 +1632,9 @@ fn burn_files_job(
     if avail >= 0 && (avail as i64) < size {
         notify.log(
             Level::Warning,
-            format!(
-                "Image (≈ {}) lijkt groter dan de beschikbare ruimte (≈ {})",
-                format_blocks(expected_sectors),
-                format_blocks(avail as i32)
+            lang.w_image_size_warning(
+                &format_blocks(expected_sectors),
+                &format_blocks(avail as i32),
             ),
         );
     }
@@ -1819,7 +1650,7 @@ fn burn_files_job(
             || (st.raw.disc_add_session)(disc, session, ffi::BURN_POS_END) != 1
             || (st.raw.session_add_track)(session, track, ffi::BURN_POS_END) != 1
         {
-            let msg = "Kan het libburn-model niet opbouwen".to_string();
+            let msg = lang.w_model_failed();
             notify.log(Level::Error, &msg);
             (st.raw.source_free)(src);
             (iso.write_opts_free)(iso_opts);
@@ -1833,7 +1664,7 @@ fn burn_files_job(
         (st.raw.track_set_source)(track, src) == 0 && (st.raw.track_set_size)(track, size) == 1
     };
     if !model_ok {
-        let msg = "Kan de libisofs-bron niet aan de track koppelen".to_string();
+        let msg = lang.w_attach_failed();
         notify.log(Level::Error, &msg);
         unsafe {
             (st.raw.track_free)(track);
@@ -1848,7 +1679,7 @@ fn burn_files_job(
     }
     unsafe { (st.raw.track_define_data)(track, 0, s.padding_kib * 1024, 1, ffi::BURN_MODE1) };
 
-    let opts = match unsafe { make_write_opts(&st.raw, di.drive, disc, s, notify) } {
+    let opts = match unsafe { make_write_opts(&st.raw, di.drive, disc, s, lang, notify) } {
         Ok(o) => o,
         Err(msg) => {
             unsafe {
@@ -1873,17 +1704,7 @@ fn burn_files_job(
         total_sectors: expected_sectors,
         simulate: s.simulate,
     });
-    notify.log(
-        Level::Info,
-        format!(
-            "Station {index}: branden gestart{}…",
-            if s.simulate {
-                " (SIMULATIE — laser uit)"
-            } else {
-                ""
-            }
-        ),
-    );
+    notify.log(Level::Info, lang.w_burn_started(index, s.simulate));
     active.push(ActiveJob {
         index,
         adr,
@@ -1951,16 +1772,7 @@ fn grab_and_check_media(
     let grabbed = unsafe { (st.raw.drive_grab)(di.drive, 0) } == 1;
     if !grabbed {
         let adr = unsafe { adr_of(di, &st.raw) };
-        let msg = format!(
-            "Grab mislukt voor {} — drive mogelijk bezet (bijv. automount door de \
-             bestandsbeheerder). Zet “Exclusief openen” uit (Instellingen → Apparaat) \
-             of unmount de schijf.",
-            if adr.is_empty() {
-                format!("station {index}")
-            } else {
-                adr.clone()
-            }
-        );
+        let msg = st.lang.w_grab_failed(index, &adr);
         notify.log(Level::Error, &msg);
         notify.send(Event::BurnFailed { index, error: msg });
         return Err(());
@@ -1977,20 +1789,14 @@ fn grab_and_check_media(
     }
 
     if status != DiscStatus::Blank && status != DiscStatus::Appendable {
-        let msg = format!(
-            "Media is niet beschrijfbaar (status: {}) — lege of onvolledige media nodig",
-            disc_label(status)
-        );
+        let msg = st.lang.w_media_not_writable(status);
         notify.log(Level::Error, &msg);
         unsafe { (st.raw.drive_release)(di.drive, 0) };
         notify.send(Event::BurnFailed { index, error: msg });
         return Err(());
     }
     if status == DiscStatus::Appendable {
-        notify.log(
-            Level::Warning,
-            "Media is onvolledig (appendable) — de nieuwe sessie wordt eraan toegevoegd",
-        );
+        notify.log(Level::Warning, st.lang.w_media_appendable());
     }
     Ok(status)
 }
@@ -2003,6 +1809,7 @@ unsafe fn make_write_opts(
     drive: *mut ffi::BurnDrive,
     disc: *mut ffi::BurnDisc,
     s: &BurnSettings,
+    lang: Lang,
     notify: &Notifier,
 ) -> Result<*mut ffi::BurnWriteOpts, String> {
     use crate::settings::{MultiSession, WriteMode};
@@ -2010,7 +1817,7 @@ unsafe fn make_write_opts(
     unsafe {
         let opts = (raw.write_opts_new)(drive);
         if opts.is_null() {
-            let msg = "Kan de write-opts niet aanmaken".to_string();
+            let msg = lang.w_make_opts_failed();
             notify.log(Level::Error, &msg);
             return Err(msg);
         }
@@ -2029,15 +1836,7 @@ unsafe fn make_write_opts(
             let mut pname = [0 as c_char; 80];
             let _ = (raw.disc_get_profile)(drive, &mut profile_no, pname.as_mut_ptr());
             if profile_is_overwritable(profile_no) {
-                notify.log(
-                    Level::Info,
-                    format!(
-                        "Media (profiel 0x{:02X}) is direct overschrijfbaar — \
-                         multi-session is niet van toepassing; de media blijft \
-                         altijd beschrijfbaar",
-                        profile_no
-                    ),
-                );
+                notify.log(Level::Info, lang.w_overwritable_note(profile_no));
                 multi = 0;
             }
         }
@@ -2045,10 +1844,7 @@ unsafe fn make_write_opts(
         (raw.write_opts_set_underrun_proof)(opts, s.underrun_proof as c_int);
         if s.overburn {
             (raw.write_opts_set_force)(opts, 1);
-            notify.log(
-                Level::Info,
-                "Overburn/force aan: enkele conformiteitschecks worden genegeerd",
-            );
+            notify.log(Level::Info, lang.w_overburn_note());
         }
 
         match s.write_mode {
@@ -2057,16 +1853,9 @@ unsafe fn make_write_opts(
                 let wt = (raw.write_opts_auto_write_type)(opts, disc, reasons.as_mut_ptr(), 0);
                 if wt == ffi::BURN_WRITE_NONE {
                     let reasons = cbuf_to_string(&reasons);
-                    let mut msg = format!(
-                        "Geen geschikte schrijfmodus gevonden: {}",
-                        if reasons.is_empty() {
-                            "onbekende reden"
-                        } else {
-                            &reasons
-                        }
-                    );
+                    let mut msg = lang.w_write_mode_failed(&reasons);
                     notify.log(Level::Error, &msg);
-                    if let Some(hint) = simulation_hint(s, &reasons) {
+                    if let Some(hint) = simulation_hint(s, &reasons, lang) {
                         notify.log(Level::Warning, hint.clone());
                         msg.push_str(" — ");
                         msg.push_str(&hint);
@@ -2074,25 +1863,21 @@ unsafe fn make_write_opts(
                     (raw.write_opts_free)(opts);
                     return Err(msg);
                 }
-                notify.log(
-                    Level::Info,
-                    format!("Schrijfmodus (auto): {}", write_type_name(wt)),
-                );
+                notify.log(Level::Info, lang.w_write_mode_auto(write_type_name(wt)));
             }
             WriteMode::Tao => {
                 if (raw.write_opts_set_write_type)(opts, ffi::BURN_WRITE_TAO, ffi::BURN_BLOCK_MODE1)
                     != 1
                 {
-                    let msg =
-                        "TAO + MODE1 wordt niet door deze drive/media ondersteund".to_string();
+                    let msg = lang.w_tao_unsupported();
                     notify.log(Level::Error, &msg);
                     (raw.write_opts_free)(opts);
                     return Err(msg);
                 }
-                notify.log(Level::Info, "Schrijfmodus: TAO (track-at-once)");
-                if let Some(err) = precheck_write_opts(raw, opts, disc, s) {
+                notify.log(Level::Info, lang.w_write_mode_tao());
+                if let Some(err) = precheck_write_opts(raw, opts, disc, s, lang) {
                     notify.log(Level::Error, &err);
-                    if let Some(hint) = simulation_hint(s, &err) {
+                    if let Some(hint) = simulation_hint(s, &err, lang) {
                         notify.log(Level::Warning, hint);
                     }
                     (raw.write_opts_free)(opts);
@@ -2103,16 +1888,15 @@ unsafe fn make_write_opts(
                 if (raw.write_opts_set_write_type)(opts, ffi::BURN_WRITE_SAO, ffi::BURN_BLOCK_SAO)
                     != 1
                 {
-                    let msg = "SAO + SAO-bloktype wordt niet door deze drive/media ondersteund"
-                        .to_string();
+                    let msg = lang.w_sao_unsupported();
                     notify.log(Level::Error, &msg);
                     (raw.write_opts_free)(opts);
                     return Err(msg);
                 }
-                notify.log(Level::Info, "Schrijfmodus: SAO (session-at-once)");
-                if let Some(err) = precheck_write_opts(raw, opts, disc, s) {
+                notify.log(Level::Info, lang.w_write_mode_sao());
+                if let Some(err) = precheck_write_opts(raw, opts, disc, s, lang) {
                     notify.log(Level::Error, &err);
-                    if let Some(hint) = simulation_hint(s, &err) {
+                    if let Some(hint) = simulation_hint(s, &err, lang) {
                         notify.log(Level::Warning, hint);
                     }
                     (raw.write_opts_free)(opts);
@@ -2178,7 +1962,7 @@ unsafe fn poll_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier) -> 
                     kbps,
                     buffer_pct,
                     fifo_pct,
-                    phase: drive_status_label(ds).to_string(),
+                    phase: ds,
                     elapsed_secs: elapsed,
                     eta_secs: eta,
                 });
@@ -2186,14 +1970,14 @@ unsafe fn poll_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier) -> 
             }
         } else {
             // Onderhoudsjob: wissen/formatteren met percentage.
-            let (label, busy, kind) = match job.kind {
-                JobKind::Erase => ("Wissen", DriveStatus::Erasing, MaintKind::Erase),
-                _ => ("Herstelpoging", DriveStatus::Formatting, MaintKind::Format),
+            let (busy, kind) = match job.kind {
+                JobKind::Erase => (DriveStatus::Erasing, MaintKind::Erase),
+                _ => (DriveStatus::Formatting, MaintKind::Format),
             };
             if ds == busy && prog.sectors > 0 {
                 let pct = ((prog.sector as f32 / prog.sectors as f32) * 100.0).min(100.0) as i32;
                 if Some(pct) != job.last_pct {
-                    notify.log(Level::Info, format!("{label}… {pct}%"));
+                    notify.log(Level::Info, st.lang.w_maint_progress(kind, pct));
                     notify.send(Event::MaintProgress {
                         kind,
                         index: job.index,
@@ -2247,14 +2031,8 @@ unsafe fn finalize_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier)
                         (st.raw.drive_release)(job.drive, 0);
                         thread::sleep(Duration::from_millis(300));
                         if is_dev_mounted(&job.adr) {
-                            notify.log(
-                                Level::Info,
-                                format!(
-                                    "Schijf `{}` is aangekoppeld — eerst unmounten voor de eject…",
-                                    job.adr
-                                ),
-                            );
-                            try_unmount(&job.adr, notify);
+                            notify.log(Level::Info, st.lang.w_eject_mounted(&job.adr));
+                            try_unmount(&job.adr, st.lang, notify);
                             thread::sleep(Duration::from_millis(300));
                         }
                         // De drive/udisks kan na het unmounten even bezig
@@ -2265,45 +2043,31 @@ unsafe fn finalize_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier)
                                 grabbed = true;
                                 break;
                             }
-                            notify.log(
-                                Level::Info,
-                                format!(
-                                    "Re-grab poging {poging} mislukt — nogmaals over een seconde…"
-                                ),
-                            );
+                            notify.log(Level::Info, st.lang.w_regrab_failed(poging));
                             thread::sleep(Duration::from_secs(1));
                         }
                         if grabbed {
                             (st.raw.drive_release)(job.drive, 1);
-                            notify.log(Level::Info, "Eject-verzoek verzonden");
+                            notify.log(Level::Info, st.lang.w_eject_sent());
                             notify.send(Event::MediaEjected { index: job.index });
                         } else {
-                            notify.log(
-                                Level::Warning,
-                                "Kon het station niet opnieuw grabben voor de eject — \
-                                 eject handmatig nodig",
-                            );
+                            notify.log(Level::Warning, st.lang.w_eject_manual());
                         }
                     } else {
                         (st.raw.drive_release)(job.drive, 0);
-                        notify.log(Level::Info, "Drive vrijgegeven");
+                        notify.log(Level::Info, st.lang.w_drive_released());
                     }
 
                     if job.cancelled {
-                        notify.log(Level::Warning, "Brandjob geannuleerd");
+                        notify.log(Level::Warning, st.lang.w_burn_cancelled());
                         notify.send(Event::BurnCancelled { index: job.index });
                     } else if well {
                         notify.log(
                             Level::Success,
-                            format!(
-                                "Station {}: brandjob klaar{} — media {}",
+                            st.lang.w_burn_done(
                                 job.index,
-                                if wj.s.simulate { " (simulatie)" } else { "" },
-                                if wj.s.multi_session == crate::settings::MultiSession::Yes {
-                                    "blijft appendable"
-                                } else {
-                                    "is afgesloten"
-                                }
+                                wj.s.simulate,
+                                wj.s.multi_session == crate::settings::MultiSession::Yes,
                             ),
                         );
                         // Samenvatting (komt automatisch ook in het
@@ -2323,23 +2087,17 @@ unsafe fn finalize_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier)
                             };
                             notify.log(
                                 Level::Info,
-                                format!(
-                                    "Station {}: {} in {duur} — gemiddeld {:.0} kB/s",
+                                st.lang.w_burn_summary(
                                     job.index,
-                                    format_blocks(job.last_sector),
+                                    &format_blocks(job.last_sector),
+                                    &duur,
                                     kbps,
                                 ),
                             );
                         }
                         notify.send(Event::BurnDone { index: job.index });
                     } else {
-                        let msg = format!(
-                            "Brandjob op station {} mislukt — de drive meldt dat de \
-                             schrijfactie niet goed is verlopen. Controleer de media \
-                             (kwaliteit/kromming) en probeer eventueel een lagere \
-                             snelheid of andere schijf",
-                            job.index
-                        );
+                        let msg = st.lang.w_burn_failed(job.index);
                         notify.log(Level::Error, &msg);
                         notify.send(Event::BurnFailed {
                             index: job.index,
@@ -2352,19 +2110,19 @@ unsafe fn finalize_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier)
                 (st.raw.drive_re_assess)(job.drive, 0);
                 (st.raw.drive_release)(job.drive, 0);
                 if job.cancelled {
-                    notify.log(Level::Warning, "Wissen geannuleerd");
+                    notify.log(Level::Warning, st.lang.w_erase_cancelled());
                     notify.send(Event::MaintCancelled {
                         kind: MaintKind::Erase,
                         index: job.index,
                     });
                 } else if well {
-                    notify.log(Level::Success, "Media gewist");
+                    notify.log(Level::Success, st.lang.w_erased());
                     notify.send(Event::MaintDone {
                         kind: MaintKind::Erase,
                         index: job.index,
                     });
                 } else {
-                    let msg = "Wissen mislukt — zie de libburn-meldingen hierboven".to_string();
+                    let msg = st.lang.w_erase_failed();
                     notify.log(Level::Error, &msg);
                     notify.send(Event::MaintFailed {
                         kind: MaintKind::Erase,
@@ -2377,28 +2135,19 @@ unsafe fn finalize_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier)
                 (st.raw.drive_re_assess)(job.drive, 0);
                 (st.raw.drive_release)(job.drive, 0);
                 if job.cancelled {
-                    notify.log(Level::Warning, "Herstelpoging geannuleerd");
+                    notify.log(Level::Warning, st.lang.w_restore_cancelled());
                     notify.send(Event::MaintCancelled {
                         kind: MaintKind::Format,
                         index: job.index,
                     });
                 } else if well {
-                    notify.log(
-                        Level::Success,
-                        "Herstelpoging geslaagd — media opnieuw geformatteerd",
-                    );
+                    notify.log(Level::Success, st.lang.w_restore_done());
                     notify.send(Event::MaintDone {
                         kind: MaintKind::Format,
                         index: job.index,
                     });
                 } else {
-                    let msg = "Herstelpoging mislukt — zie de libburn-meldingen \
-                               hierboven. Tips: wissel ‘Certificering \
-                               activeren’ en ‘Defect management activeren’ \
-                               eens uit — sommige drives weigeren BD-RE \
-                               zonder spare-gebieden of met volledige \
-                               certificatie"
-                        .to_string();
+                    let msg = st.lang.w_restore_failed();
                     notify.log(Level::Error, &msg);
                     notify.send(Event::MaintFailed {
                         kind: MaintKind::Format,
@@ -2426,6 +2175,7 @@ unsafe fn build_burn_model(
     path_c: *const c_char,
     file_size: u64,
     s: &BurnSettings,
+    lang: Lang,
     notify: &Notifier,
 ) -> Result<
     (
@@ -2443,14 +2193,14 @@ unsafe fn build_burn_model(
         let session = (raw.session_create)();
         let track = (raw.track_create)();
         if disc.is_null() || session.is_null() || track.is_null() {
-            let msg = "Kan disc/session/track-model niet aanmaken".to_string();
+            let msg = lang.w_model_create_failed();
             notify.log(Level::Error, &msg);
             return Err(msg);
         }
         if (raw.disc_add_session)(disc, session, ffi::BURN_POS_END) != 1
             || (raw.session_add_track)(session, track, ffi::BURN_POS_END) != 1
         {
-            let msg = "Kan session/track niet aan het model toevoegen".to_string();
+            let msg = lang.w_model_add_failed();
             notify.log(Level::Error, &msg);
             (raw.track_free)(track);
             (raw.session_free)(session);
@@ -2461,25 +2211,25 @@ unsafe fn build_burn_model(
         // Bron: bestand → FIFO (4 MiB) → track.
         let file_source = (raw.file_source_new)(path_c, std::ptr::null());
         if file_source.is_null() {
-            let msg = "Kan de file-bron niet aanmaken (bestand onleesbaar?)".to_string();
+            let msg = lang.w_file_source_failed();
             notify.log(Level::Error, &msg);
             return Err(msg);
         }
         let fifo = (raw.fifo_source_new)(file_source, 2048, BURN_FIFO_CHUNKS, 0);
         (raw.source_free)(file_source); // fifo heeft een eigen referentie
         if fifo.is_null() {
-            let msg = "Kan de FIFO-bron niet aanmaken".to_string();
+            let msg = lang.w_fifo_source_failed();
             notify.log(Level::Error, &msg);
             return Err(msg);
         }
         if (raw.track_set_source)(track, fifo) != 0 {
-            let msg = "Kan de bron niet aan de track koppelen".to_string();
+            let msg = lang.w_source_attach_failed();
             notify.log(Level::Error, &msg);
             (raw.source_free)(fifo);
             return Err(msg);
         }
         if (raw.track_set_size)(track, file_size as c_longlong) != 1 {
-            let msg = "Kan de trackgrootte niet instellen".to_string();
+            let msg = lang.w_track_size_failed();
             notify.log(Level::Error, &msg);
             (raw.source_free)(fifo);
             return Err(msg);
@@ -2488,7 +2238,7 @@ unsafe fn build_burn_model(
         (raw.track_define_data)(track, 0, s.padding_kib * 1024, 1, ffi::BURN_MODE1);
 
         // Write-opts + schrijfmodus (gedeelde helper).
-        let opts = make_write_opts(raw, drive, disc, s, notify)?;
+        let opts = make_write_opts(raw, drive, disc, s, lang, notify)?;
 
         Ok((disc, session, track, fifo, opts))
     }
@@ -2527,6 +2277,7 @@ unsafe fn precheck_write_opts(
     opts: *mut ffi::BurnWriteOpts,
     disc: *mut ffi::BurnDisc,
     s: &BurnSettings,
+    lang: Lang,
 ) -> Option<String> {
     unsafe {
         let mut reasons = [0 as c_char; ffi::BURN_REASONS_LEN];
@@ -2535,15 +2286,8 @@ unsafe fn precheck_write_opts(
             return None;
         }
         let reasons = cbuf_to_string(&reasons);
-        let mut msg = format!(
-            "Deze schrijfmodus wordt afgewezen voor deze drive/media: {}",
-            if reasons.is_empty() {
-                "onbekende reden"
-            } else {
-                &reasons
-            }
-        );
-        if let Some(hint) = simulation_hint(s, &reasons) {
+        let mut msg = lang.w_precheck_failed(&reasons);
+        if let Some(hint) = simulation_hint(s, &reasons, lang) {
             msg.push_str(" — ");
             msg.push_str(&hint);
         }
@@ -2555,21 +2299,13 @@ unsafe fn precheck_write_opts(
 /// en geeft een concrete tip terug. Simulatie wordt doorgaans alleen door
 /// CD-drives/-media ondersteund; alle BD-media en DVD-R DL kunnen nooit
 /// simuleren, net als overbeschrijfbare media (DVD+RW, DVD-RAM, DVD-RW RO).
-fn simulation_hint(s: &BurnSettings, reasons: &str) -> Option<String> {
+fn simulation_hint(s: &BurnSettings, reasons: &str, lang: Lang) -> Option<String> {
     if !s.simulate {
         return None;
     }
     let lower = reasons.to_ascii_lowercase();
     if lower.contains("simulation") || lower.contains("simul") {
-        Some(
-            "Tip: “Simulatie (laser uit)” wordt door deze drive/media niet \
-             ondersteund. Simulatie werkt praktisch alleen bij CD-media; alle \
-             BD-media, DVD-R DL en overbeschrijfbare media (DVD+RW, DVD-RAM, \
-             DVD-RW RO) kunnen nooit simuleren. Zet “Simulatie” uit in \
-             Instellingen → Branden — let op: zonder simulatie wordt er \
-             écht geschreven."
-                .to_string(),
-        )
+        Some(lang.w_simulation_hint())
     } else {
         None
     }
@@ -2618,29 +2354,20 @@ fn is_dev_mounted(dev: &str) -> bool {
 
 /// Probeert de schijf te unmounten via udisksctl (aanwezig op elk
 /// desktopsysteem met automount).
-fn try_unmount(dev: &str, notify: &Notifier) {
+fn try_unmount(dev: &str, lang: Lang, notify: &Notifier) {
     match std::process::Command::new("udisksctl")
         .args(["unmount", "-b", dev])
         .output()
     {
         Ok(out) if out.status.success() => {
-            notify.log(
-                Level::Info,
-                format!("Aankoppeling van `{dev}` is opgeheven"),
-            );
+            notify.log(Level::Info, lang.w_unmounted(dev));
         }
         Ok(out) => {
             let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            notify.log(
-                Level::Warning,
-                format!("Unmount van `{dev}` mislukt: {err}"),
-            );
+            notify.log(Level::Warning, lang.w_unmount_failed(dev, &err));
         }
         Err(e) => {
-            notify.log(
-                Level::Warning,
-                format!("`udisksctl` niet beschikbaar voor unmount: {e}"),
-            );
+            notify.log(Level::Warning, lang.w_unmount_unavailable(&e.to_string()));
         }
     }
 }
@@ -2648,23 +2375,18 @@ fn try_unmount(dev: &str, notify: &Notifier) {
 /// Wis de media los van een brandjob (stap 6).
 fn erase_job(
     state: &Option<WorkerState>,
+    lang: Lang,
     index: usize,
     fast: bool,
     active: &mut Vec<ActiveJob>,
     notify: &Notifier,
 ) {
     let Some(st) = state else {
-        notify.log(
-            Level::Warning,
-            "Wissen aangevraagd, maar libburn is niet geladen",
-        );
+        notify.log(Level::Warning, lang.w_erase_no_lib());
         return;
     };
     if st.infos.is_null() || index >= st.n_drives {
-        notify.log(
-            Level::Warning,
-            format!("Wissen aangevraagd voor onbekend station {index}"),
-        );
+        notify.log(Level::Warning, lang.w_erase_unknown(index));
         return;
     }
     let di = unsafe { *st.infos.add(index) };
@@ -2672,26 +2394,12 @@ fn erase_job(
         kind: MaintKind::Erase,
         index,
     });
-    notify.log(
-        Level::Info,
-        format!(
-            "Station {index}: media wissen ({})…",
-            if fast { "snel" } else { "volledig" }
-        ),
-    );
+    notify.log(Level::Info, lang.w_erase_starting(index, fast));
 
     let grabbed = unsafe { (st.raw.drive_grab)(di.drive, 0) } == 1;
     if !grabbed {
         let adr = unsafe { adr_of(&di, &st.raw) };
-        let msg = format!(
-            "Grab mislukt voor {} — drive mogelijk bezet (bijv. automount). \
-             Zet “Exclusief openen” uit of unmount de schijf.",
-            if adr.is_empty() {
-                format!("station {index}")
-            } else {
-                adr.clone()
-            }
-        );
+        let msg = st.lang.w_grab_failed(index, &adr);
         notify.log(Level::Error, &msg);
         notify.send(Event::MaintFailed {
             kind: MaintKind::Erase,
@@ -2705,11 +2413,7 @@ fn erase_job(
     let mut pname = [0 as c_char; 80];
     let _ = unsafe { (st.raw.disc_get_profile)(di.drive, &mut profile_no, pname.as_mut_ptr()) };
     if profile_is_overwritable(profile_no) {
-        let msg = format!(
-            "Media (profiel 0x{:02X}) is direct overschrijfbaar — wissen is niet \
-             nodig; gebruik de “Herstelpoging” om de schijf te herstellen",
-            profile_no
-        );
+        let msg = st.lang.w_erase_overwritable(profile_no);
         notify.log(Level::Error, &msg);
         unsafe { (st.raw.drive_release)(di.drive, 0) };
         notify.send(Event::MaintFailed {
@@ -2722,7 +2426,7 @@ fn erase_job(
     let erasable =
         unsafe { (st.raw.disc_erasable)(di.drive) } != 0 || profile_is_rewritable(profile_no);
     if !erasable {
-        let msg = "Deze media is niet herbeschrijfbaar — wissen is niet mogelijk".to_string();
+        let msg = st.lang.w_erase_not_rewritable();
         notify.log(Level::Error, &msg);
         unsafe { (st.raw.drive_release)(di.drive, 0) };
         notify.send(Event::MaintFailed {
@@ -2784,14 +2488,14 @@ fn format_descriptor_types(st: &WorkerState, di: &ffi::DriveInfo, notify: &Notif
         if !ok {
             notify.log(
                 Level::Info,
-                "Format-capaciteiten: drive meldt geen leesbare format-info",
+                "Format capabilities: drive reports no readable format info",
             );
             return Vec::new();
         }
         let status_txt = match status {
-            1 => "ongeformatteerd",
-            2 => "geformatteerd",
-            3 => "onbekende format-status",
+            1 => "unformatted",
+            2 => "formatted",
+            3 => "unknown format status",
             _ => "?",
         };
         let mut types = Vec::new();
@@ -2821,11 +2525,11 @@ fn format_descriptor_types(st: &WorkerState, di: &ffi::DriveInfo, notify: &Notif
         notify.log(
             Level::Info,
             format!(
-                "Format-capaciteiten: {}{}, aangeboden: {}",
+                "Format capabilities: {}{}, offered: {}",
                 status_txt,
                 cur,
                 if list.is_empty() {
-                    "geen".to_string()
+                    "none".to_string()
                 } else {
                     list
                 }
@@ -2838,23 +2542,18 @@ fn format_descriptor_types(st: &WorkerState, di: &ffi::DriveInfo, notify: &Notif
 /// Formatteer de media los van een brandjob (stap 6).
 fn format_job(
     state: &Option<WorkerState>,
+    lang: Lang,
     index: usize,
     s: &BurnSettings,
     active: &mut Vec<ActiveJob>,
     notify: &Notifier,
 ) {
     let Some(st) = state else {
-        notify.log(
-            Level::Warning,
-            "Herstelpoging aangevraagd, maar libburn is niet geladen",
-        );
+        notify.log(Level::Warning, lang.w_restore_no_lib());
         return;
     };
     if st.infos.is_null() || index >= st.n_drives {
-        notify.log(
-            Level::Warning,
-            format!("Herstelpoging aangevraagd voor onbekend station {index}"),
-        );
+        notify.log(Level::Warning, lang.w_restore_unknown(index));
         return;
     }
     let di = unsafe { *st.infos.add(index) };
@@ -2862,7 +2561,7 @@ fn format_job(
         kind: MaintKind::Format,
         index,
     });
-    notify.log(Level::Info, "Herstelpoging: standaardgrootte…");
+    notify.log(Level::Info, lang.w_restore_default_size());
 
     // Diagnostiek: SCSI-commandolog voor deze job — elk commando + sense
     // komt in /tmp/libburn_sg_command_log. Onmisbaar bij format-problemen,
@@ -2871,24 +2570,16 @@ fn format_job(
     // de log al uit; dan herstart de volgende job hem bij de volgende grab
     // niet meer — acceptabel voor diagnostiek.)
     unsafe { (st.raw.set_scsi_logging)(1 | 4) };
+    // Taalneutraal: pure diagnostiek.
     notify.log(
         Level::Info,
-        "SCSI-commandolog aan: /tmp/libburn_sg_command_log",
+        "SCSI command log on: /tmp/libburn_sg_command_log",
     );
 
     let grabbed = unsafe { (st.raw.drive_grab)(di.drive, 0) } == 1;
     if !grabbed {
         let adr = unsafe { adr_of(&di, &st.raw) };
-        let msg = format!(
-            "Grab mislukt voor {} — drive mogelijk bezet (bijv. automount). \
-             Zet “Exclusief openen” uit (Instellingen → Apparaat) \
-             of unmount de schijf.",
-            if adr.is_empty() {
-                format!("station {index}")
-            } else {
-                adr.clone()
-            }
-        );
+        let msg = st.lang.w_grab_failed(index, &adr);
         notify.log(Level::Error, &msg);
         notify.send(Event::MaintFailed {
             kind: MaintKind::Format,
@@ -2902,11 +2593,7 @@ fn format_job(
     let mut pname = [0 as c_char; 80];
     let _ = unsafe { (st.raw.disc_get_profile)(di.drive, &mut profile_no, pname.as_mut_ptr()) };
     if !profile_is_formattable(profile_no) {
-        let msg = format!(
-            "Herstelpoging is niet van toepassing op deze media (profiel 0x{:02X}) \
-             — voor CD-RW/DVD-RW sequentieel is “Wissen” de juiste actie",
-            profile_no
-        );
+        let msg = lang.w_restore_not_applicable(profile_no);
         notify.log(Level::Error, &msg);
         unsafe { (st.raw.drive_release)(di.drive, 0) };
         notify.send(Event::MaintFailed {
@@ -2920,12 +2607,7 @@ fn format_job(
     // Diagnostiek: welke format-types biedt de drive voor deze media aan?
     let fmt_types = format_descriptor_types(st, &di, notify);
     if s.disable_dm_on_format && profile_no == 0x43 && !fmt_types.contains(&0x31) {
-        notify.log(
-            Level::Warning,
-            "De drive biedt geen format-type 0x31 (BD-RE zonder defect \
-             management) aan — libburn weigert dit format dan; zet \
-             ‘Defect management uitschakelen’ uit",
-        );
+        notify.log(Level::Warning, lang.w_restore_no_dm_type());
     }
 
     // Volledige format met enforce-re-format (bit4): bij DVD+RW/BD-RE/DVD-RAM
@@ -2937,28 +2619,16 @@ fn format_job(
     let mut fmt_flag = (3 << 1) | (1 << 4);
     if s.disable_dm_on_format {
         fmt_flag |= 1 << 5;
-        notify.log(
-            Level::Info,
-            "Defect management wordt bij deze herstelpoging uitgeschakeld — \
-             sneller branden, maar slechte blokken worden niet meer hermapd",
-        );
+        notify.log(Level::Info, lang.w_restore_dm_off());
     }
     if s.format_skip_certification {
         // Bit6: libburn kiest dan format-type 0x00 zonder certificatie —
         // de omweg waarmee dvd+rw-format vergelijkbare drives wél laat
         // formatteren.
         fmt_flag |= 1 << 6;
-        notify.log(
-            Level::Info,
-            "Certificatie wordt overgeslagen — libburn kiest format-type \
-             0x00 zonder certificatie (snelformat)",
-        );
+        notify.log(Level::Info, lang.w_restore_cert_skip());
     }
-    notify.log(
-        Level::Info,
-        "Herstelpoging: de media wordt opnieuw geformatteerd; dit kan \
-         enkele minuten duren…",
-    );
+    notify.log(Level::Info, lang.w_restore_running());
     unsafe { (st.raw.disc_format)(di.drive, 0, fmt_flag) };
     let adr = unsafe { adr_of(&di, &st.raw) };
     active.push(ActiveJob {
@@ -2982,6 +2652,7 @@ fn format_job(
 /// kopie gegrabbed en daarna weer vrijgegeven. Annuleren kan tussentijds.
 fn read_disc(
     state: &Option<WorkerState>,
+    lang: Lang,
     index: usize,
     path: &str,
     cmds: &Receiver<Command>,
@@ -2991,35 +2662,25 @@ fn read_disc(
     use std::io::Write;
 
     let Some(st) = state else {
-        notify.log(
-            Level::Warning,
-            "Kopie aangevraagd, maar libburn is niet geladen",
-        );
+        notify.log(Level::Warning, lang.w_read_no_lib());
         return;
     };
     if st.infos.is_null() || index >= st.n_drives {
-        notify.log(
-            Level::Warning,
-            format!("Kopie aangevraagd voor onbekend station {index}"),
-        );
+        notify.log(Level::Warning, lang.w_read_unknown(index));
         return;
     }
-    let path = path.trim();
     if path.is_empty() {
-        notify.log(Level::Warning, "Kopie aangevraagd zonder uitvoerbestand");
+        notify.log(Level::Warning, lang.w_read_no_path());
         return;
     }
 
     let di = unsafe { *st.infos.add(index) };
-    notify.log(
-        Level::Info,
-        format!("Station {index}: schijfkopie starten naar `{path}`…"),
-    );
+    notify.log(Level::Info, lang.w_read_start(index, path));
 
     // Niet overschrijven: kies een andere naam.
     if std::path::Path::new(path).exists() {
-        let msg = format!("Uitvoerbestand bestaat al: `{path}` — kies een andere naam");
-        notify.log(Level::Error, format!("Station {index}: {msg}"));
+        let msg = lang.w_read_exists(path);
+        notify.log(Level::Error, format!("{}: {msg}", lang.w_station(index)));
         notify.send(Event::ReadFailed { index, error: msg });
         return;
     }
@@ -3027,17 +2688,8 @@ fn read_disc(
     let grabbed = unsafe { (st.raw.drive_grab)(di.drive, 0) } == 1;
     if !grabbed {
         let adr = unsafe { adr_of(&di, &st.raw) };
-        let msg = format!(
-            "Grab mislukt voor {} — drive mogelijk bezet (bijv. automount door de \
-             bestandsbeheerder). Zet “Exclusief openen” uit (Instellingen → Apparaat) \
-             of unmount de schijf.",
-            if adr.is_empty() {
-                format!("station {index}")
-            } else {
-                adr.clone()
-            }
-        );
-        notify.log(Level::Error, format!("Station {index}: {msg}"));
+        let msg = st.lang.w_grab_failed(index, &adr);
+        notify.log(Level::Error, msg.clone());
         notify.send(Event::ReadFailed { index, error: msg });
         return;
     }
@@ -3046,21 +2698,15 @@ fn read_disc(
     let mut capacity: c_int = 0;
     if unsafe { (st.raw.get_read_capacity)(di.drive, &mut capacity, 0) } != 1 || capacity <= 0 {
         unsafe { (st.raw.drive_release)(di.drive, 0) };
-        let msg = "Geen leesbare capaciteit — media leeg of geen datamedia \
-                   (CD-audio wordt nog niet ondersteund)"
-            .to_string();
-        notify.log(Level::Error, format!("Station {index}: {msg}"));
+        let msg = lang.w_read_no_capacity();
+        notify.log(Level::Error, format!("{}: {msg}", lang.w_station(index)));
         notify.send(Event::ReadFailed { index, error: msg });
         return;
     }
     let total_blocks = capacity as i64;
     notify.log(
         Level::Info,
-        format!(
-            "Station {index}: {} blokken (≈ {}) lezen…",
-            total_blocks,
-            format_blocks(capacity)
-        ),
+        lang.w_read_blocks(index, total_blocks, &format_blocks(capacity)),
     );
     notify.send(Event::ReadStarted {
         index,
@@ -3071,8 +2717,8 @@ fn read_disc(
         Ok(f) => f,
         Err(e) => {
             unsafe { (st.raw.drive_release)(di.drive, 0) };
-            let msg = format!("Kan `{path}` niet aanmaken: {e}");
-            notify.log(Level::Error, format!("Station {index}: {msg}"));
+            let msg = lang.w_read_create_failed(path, &e.to_string());
+            notify.log(Level::Error, format!("{}: {msg}", lang.w_station(index)));
             notify.send(Event::ReadFailed { index, error: msg });
             return;
         }
@@ -3159,42 +2805,35 @@ fn read_disc(
     if cancelled {
         notify.log(
             Level::Warning,
-            format!(
-                "Station {index}: kopie geannuleerd na {} blokken; `{path}` blijft (onvolledig) staan",
-                blocks_done
-            ),
+            lang.w_read_cancelled(index, blocks_done, path),
         );
         notify.send(Event::ReadCancelled);
     } else if let Some(err) = error {
-        notify.log(Level::Error, format!("Station {index}: {err}"));
+        notify.log(Level::Error, lang.w_read_error(index, &err));
         notify.send(Event::ReadFailed { index, error: err });
     } else {
         notify.log(
             Level::Success,
-            format!(
-                "Station {index}: schijfkopie klaar — {} ({}) → `{path}`",
-                blocks_done,
-                format_blocks(blocks_done as i32)
-            ),
+            lang.w_read_done(index, blocks_done, &format_blocks(blocks_done as i32), path),
         );
         notify.send(Event::ReadDone);
     }
 }
 
-fn shutdown_lib(state: Option<WorkerState>, notify: &Notifier) {
+fn shutdown_lib(state: Option<WorkerState>, lang: Lang, notify: &Notifier) {
     let Some(mut st) = state else { return };
     free_drive_list(&mut st);
     unsafe { (st.raw.finish)() };
-    notify.log(Level::Info, "libburn afgesloten (burn_finish)");
+    notify.log(Level::Info, lang.w_lib_finished());
     if let Some(iso) = st.isofs {
         unsafe { (iso.finish)() };
-        notify.log(Level::Info, "libisofs afgesloten (iso_finish)");
+        notify.log(Level::Info, lang.w_isofs_finished());
     }
 }
 
 /// Laadt libisofs van het systeem (non-fataal: zonder libisofs werkt alles
 /// behalve “bestanden samenstellen”).
-fn load_isofs(notify: &Notifier) -> Option<RawLibisofs> {
+fn load_isofs(lang: Lang, notify: &Notifier) -> Option<RawLibisofs> {
     let mut candidates = Vec::new();
     if let Ok(env) = std::env::var("LIBISOFS_SO") {
         if !env.is_empty() {
@@ -3209,7 +2848,7 @@ fn load_isofs(notify: &Notifier) -> Option<RawLibisofs> {
         match RawLibisofs::load(cand) {
             Ok(iso) => unsafe {
                 if (iso.init)() != ISO_SUCCESS {
-                    last_err = format!("`{cand}`: iso_init() mislukte");
+                    last_err = lang.w_isofs_init_failed(cand);
                     continue;
                 }
                 (iso.set_msgs_severities)(
@@ -3219,21 +2858,14 @@ fn load_isofs(notify: &Notifier) -> Option<RawLibisofs> {
                 );
                 let (mut maj, mut min, mut mic) = (0, 0, 0);
                 (iso.version)(&mut maj, &mut min, &mut mic);
-                notify.log(
-                    Level::Success,
-                    format!("libisofs {maj}.{min}.{mic} geladen via `{cand}`"),
-                );
+                let version = format!("{maj}.{min}.{mic}");
+                notify.log(Level::Success, lang.w_isofs_loaded(&version, cand));
                 return Some(iso);
             },
             Err(e) => last_err = format!("`{cand}`: {e}"),
         }
     }
-    notify.log(
-        Level::Warning,
-        format!(
-            "libisofs niet geladen — “bestanden samenstellen” is niet beschikbaar ({last_err})"
-        ),
-    );
+    notify.log(Level::Warning, lang.w_isofs_unavailable_warn(&last_err));
     None
 }
 
@@ -3298,41 +2930,7 @@ pub fn format_blocks(blocks: i32) -> String {
     }
 }
 
-/// Nederlandse omschrijving van `burn_disc_status`.
-pub fn disc_label(s: DiscStatus) -> &'static str {
-    match s {
-        DiscStatus::Unready => "nog niet bekend",
-        DiscStatus::Blank => "leeg — klaar om te beschrijven",
-        DiscStatus::Empty => "geen schijf",
-        DiscStatus::Appendable => "onvolledig — extra sessie mogelijk",
-        DiscStatus::Full => "vol / afgesloten (alleen lezen)",
-        DiscStatus::Ungrabbed => "niet gegrabbed (interne fout)",
-        DiscStatus::Unsuitable => "onbruikbare media",
-        DiscStatus::Unknown(_) => "onbekend",
-    }
-}
-
-/// Nederlandse omschrijving van `burn_drive_status`.
-pub fn drive_status_label(s: DriveStatus) -> &'static str {
-    match s {
-        DriveStatus::Idle => "inactief",
-        DriveStatus::Spawning => "bezig met starten",
-        DriveStatus::Reading => "lezen",
-        DriveStatus::Writing => "schrijven",
-        DriveStatus::WritingLeadin => "lead-in schrijven",
-        DriveStatus::WritingLeadout => "lead-out schrijven",
-        DriveStatus::Erasing => "wissen",
-        DriveStatus::Grabbing => "grabben",
-        DriveStatus::WritingPregap => "pregap schrijven",
-        DriveStatus::ClosingTrack => "track afsluiten",
-        DriveStatus::ClosingSession => "sessie afsluiten",
-        DriveStatus::Formatting => "herstelpoging",
-        DriveStatus::ReadingSync => "synchroon lezen",
-        DriveStatus::WritingSync => "synchroon schrijven",
-        DriveStatus::Other(_) => "onbekend",
-    }
-}
-
+/// Profielen waarop simuleren niet mogelijk is (MMC: geen test write).
 /// Bron van een snelheidsdescriptor (zie libburn.h) — UI-labels staan in de
 /// i18n-catalogus (MediaTexts::speed_source_label).
 /// Zet kB/s om naar een leesbare ×CD/×DVD/×BD-indicatie op basis van het
