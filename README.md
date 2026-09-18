@@ -10,7 +10,7 @@ where libburn is not (yet) installed, and then explains what is needed.
 
 ## Requirements
 
-- Rust 1.95+ (edition 2024)
+- Rust 1.85+ (edition 2024; ontwikkeld en getest met 1.96)
 - libburn runtime on the system, e.g. on Debian/Ubuntu:
 
   ```sh
