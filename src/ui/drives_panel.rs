@@ -4,12 +4,13 @@ use crate::app::{App, LibState, ScanState};
 use crate::ui::colors;
 
 pub fn show(ui: &mut egui::Ui, app: &mut App) {
+    let t = app.lang.texts();
     egui::Panel::left("drives_panel")
         .default_size(280.0)
         .resizable(true)
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("Stations");
+                ui.heading(t.drives.title);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.small_button("🔄").clicked() {
                         app.request_scan();
@@ -22,11 +23,14 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                 ScanState::Scanning => {
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label("Bezig met scannen…");
+                        ui.label(t.drives.scanning);
                     });
                 }
                 ScanState::Failed { error } => {
-                    ui.colored_label(colors::BAD, format!("Scan mislukt: {error}"));
+                    ui.colored_label(
+                        colors::BAD,
+                        format!("{}: {error}", t.drives.scan_failed_prefix),
+                    );
                 }
                 _ => {}
             }
@@ -38,29 +42,15 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                             // Een eerdere scan vond wél een station — dus de
                             // drive bestaat en wordt nu geblokkeerd: de
                             // automount-hint is dan bewijsbaar juist.
-                            ui.colored_label(
-                                colors::WARN,
-                                "Geen stations gevonden terwijl “Exclusief openen” \
-                                 aan staat. Een aangekoppelde schijf (automount) kan \
-                                 de drive blokkeren — zet de modus uit \
-                                 (Instellingen → Apparaat) en scan opnieuw.",
-                            );
+                            ui.colored_label(colors::WARN, t.drives.hint_automount);
                         } else if app.exclusive_open {
-                            ui.weak(
-                                "Geen stations gevonden. Mogelijke oorzaken: geen \
-                                 brander aangesloten; of een aangekoppelde schijf \
-                                 blokkeert de drive terwijl “Exclusief openen” aan \
-                                 staat (zet de modus uit in Instellingen → Apparaat \
-                                 en scan opnieuw).",
-                            );
+                            ui.weak(t.drives.hint_none_exclusive);
                         } else {
-                            ui.weak(
-                                "Geen stations gevonden. Sluit een brander aan en scan opnieuw.",
-                            );
+                            ui.weak(t.drives.hint_none);
                         }
                     }
                     _ => {
-                        ui.weak("Stations verschijnen hier zodra libburn geladen is.");
+                        ui.weak(t.drives.not_loaded);
                     }
                 }
             }
@@ -81,7 +71,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
 
                     let title = d.display_name();
                     let sub = if d.adr.is_empty() {
-                        "(adres onbekend)".to_string()
+                        t.drives.address_unknown.to_string()
                     } else {
                         d.adr.clone()
                     };

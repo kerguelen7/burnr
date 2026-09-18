@@ -35,14 +35,7 @@ pub enum MultiSession {
 }
 
 impl MultiSession {
-    pub fn label(self) -> &'static str {
-        match self {
-            MultiSession::No => "Nee — schijf wordt afgesloten",
-            MultiSession::Yes => "Ja — schijf blijft open (multi-session)",
-        }
-    }
-
-    /// Korte vorm voor logregels.
+    /// Korte vorm voor logregels (UI-labels staan in de i18n-catalogus).
     pub fn short(self) -> &'static str {
         match self {
             MultiSession::No => "nee",

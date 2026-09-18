@@ -1,15 +1,17 @@
-//! Rechterpaneel: alle instellingen die later aan libburn worden gekoppeld.
+//! Rechterpaneel: alle instellingen die bij het branden aan libburn worden
+//! doorgegeven. Teksten via de i18n-catalogus (stap 10b-1).
 
 use crate::app::App;
 use crate::settings::{MultiSession, WriteMode};
 use crate::ui::colors;
 
 pub fn show(ui: &mut egui::Ui, app: &mut App) {
+    let t = app.lang.texts();
     egui::Panel::right("settings_panel")
         .default_size(310.0)
         .resizable(true)
         .show(ui, |ui| {
-            ui.heading("Instellingen");
+            ui.heading(t.settings.title);
             ui.separator();
 
             egui::ScrollArea::vertical().show(ui, |ui| {
@@ -20,12 +22,9 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                 ui.add_space(8.0);
                 ui.separator();
                 ui.label(
-                    egui::RichText::new(
-                        "ℹ Deze waarden worden toegepast bij het branden (🔥 Branden \
-                         in het mediakaartje).",
-                    )
-                    .small()
-                    .color(colors::DIM),
+                    egui::RichText::new(t.settings.apply_hint)
+                        .small()
+                        .color(colors::DIM),
                 );
             });
         });
@@ -41,19 +40,17 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App) {
         .and_then(|d| d.media.as_ref())
         .is_none_or(|m| !crate::worker::profile_is_overwritable(m.profile_no));
 
-    egui::CollapsingHeader::new(egui::RichText::new("🔥 Branden").strong())
+    let t = app.lang.texts();
+    egui::CollapsingHeader::new(egui::RichText::new(t.settings.burn_header).strong())
         .default_open(true)
         .show(ui, |ui| {
             let s = &mut app.settings;
 
-            ui.label(egui::RichText::new("Snelheid").strong());
-            ui.weak(
-                "De drive brandt op de hoogste door media en drive toegelaten \
-                 snelheid.",
-            );
+            ui.label(egui::RichText::new(t.settings.speed).strong());
+            ui.weak(t.settings.speed_desc);
 
             ui.add_space(4.0);
-            ui.label(egui::RichText::new("Schrijfmodus").strong());
+            ui.label(egui::RichText::new(t.settings.write_mode).strong());
             for mode in [
                 WriteMode::Auto,
                 WriteMode::Tao,
@@ -64,87 +61,59 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App) {
             }
 
             ui.add_space(4.0);
-            ui.checkbox(&mut s.simulate, "Simulatie (laser uit)");
-            ui.checkbox(&mut s.overburn, "Overburn toestaan");
-            ui.checkbox(&mut s.underrun_proof, "Buffer-underrun-beveiliging");
+            ui.checkbox(&mut s.simulate, t.settings.simulate);
+            ui.checkbox(&mut s.overburn, t.settings.overburn);
+            ui.checkbox(&mut s.underrun_proof, t.settings.underrun);
 
             ui.add_space(4.0);
             ui.add_enabled_ui(multi_applicable, |ui| {
-                ui.label(egui::RichText::new("Multi-session").strong())
-                    .on_hover_text(
-                        "Ja: na de brand extra sessies toevoegen — alleen zinvol op \
-                     schrijf-eenmalige media (CD-R, DVD±R, BD-R). Overschrijfbare \
-                     media blijft altijd beschrijfbaar.",
-                    );
+                ui.label(egui::RichText::new(t.settings.multi_session).strong())
+                    .on_hover_text(t.settings.multi_session_hover);
                 for m in [MultiSession::No, MultiSession::Yes] {
-                    ui.radio_value(&mut s.multi_session, m, m.label());
+                    ui.radio_value(&mut s.multi_session, m, t.settings.ms_label(m));
                 }
                 if !multi_applicable {
                     ui.label(
-                        egui::RichText::new(
-                            "Niet van toepassing: de media in het geselecteerde \
-                             station is overschrijfbaar en blijft altijd \
-                             beschrijfbaar.",
-                        )
-                        .small()
-                        .color(colors::DIM),
+                        egui::RichText::new(t.settings.ms_not_applicable)
+                            .small()
+                            .color(colors::DIM),
                     );
                 }
             });
 
             ui.add_space(4.0);
-            ui.label(egui::RichText::new("Algemeen").strong());
+            ui.label(egui::RichText::new(t.settings.general).strong());
             ui.horizontal(|ui| {
-                ui.label("Padding (KiB):");
+                ui.label(t.settings.padding);
                 ui.add(egui::DragValue::new(&mut s.padding_kib).range(0..=100_000))
-                    .on_hover_text(
-                        "Schrijft deze hoeveelheid nullen achter de trackdata \
-                         (tail). Voor data-discs is 0 normaal; enkele KiB kan \
-                         helpen bij bepaalde oude CD-spelers of audio-brandingen. \
-                         Heeft geen invloed op multi-session.",
-                    );
+                    .on_hover_text(t.settings.padding_hover);
             });
 
             ui.add_space(4.0);
-            ui.checkbox(&mut s.keep_timestamps, "Originele bestandsdatums behouden")
-                .on_hover_text(
-                    "Aan: bestanden krijgen hun eigen datum/tijd op de schijf \
-                 (Rock Ridge + directoryrecords). Uit: alles krijgt de \
-                 opnametijd.",
-                );
+            ui.checkbox(&mut s.keep_timestamps, t.settings.keep_timestamps)
+                .on_hover_text(t.settings.keep_timestamps_hover);
 
             ui.add_space(4.0);
-            ui.checkbox(&mut s.eject_after, "Schijf uitwerpen na afloop")
-                .on_hover_text(
-                    "Na een geslaagde brand wordt de schijf uit de drive \
-                 genomen. Een aangekoppelde schijf wordt eerst ge-unmount.",
-                );
+            ui.checkbox(&mut s.eject_after, t.settings.eject_after)
+                .on_hover_text(t.settings.eject_after_hover);
         });
 }
 
 fn device_section(ui: &mut egui::Ui, app: &mut App) {
-    egui::CollapsingHeader::new(egui::RichText::new("💽 Apparaat").strong())
+    let t = app.lang.texts();
+    egui::CollapsingHeader::new(egui::RichText::new(t.settings.device_header).strong())
         .default_open(false)
         .show(ui, |ui| {
             let mut want = app.exclusive_open;
-            if ui
-                .checkbox(&mut want, "Exclusief openen (O_EXCL)")
-                .changed()
-            {
+            if ui.checkbox(&mut want, t.settings.exclusive_open).changed() {
                 app.set_exclusive_open(want);
             }
             ui.weak(format!(
-                "Huidige modus: {}",
-                if app.exclusive_open {
-                    "exclusief (O_EXCL)"
-                } else {
-                    "niet-exclusief"
-                }
+                "{}: {}",
+                t.settings.current_mode,
+                t.settings.mode_label(app.exclusive_open)
             ));
-            ui.weak(
-                "Uitzetten als de bestandsbeheerder de schijf aankoppelt \
-                 (automount, bijv. Nemo/udisks2).",
-            );
-            ui.weak("Wijzigen herlaadt libburn en scant opnieuw.");
+            ui.weak(t.settings.exclusive_hint);
+            ui.weak(t.settings.exclusive_reload);
         });
 }
