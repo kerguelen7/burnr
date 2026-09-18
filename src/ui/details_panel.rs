@@ -69,7 +69,7 @@ fn drive_details(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry
     let t = app.lang.texts();
     // Compacte kop: naam + apparaatpad; technische details zijn inklapbaar.
     ui.horizontal(|ui| {
-        ui.heading(format!("📀 {}", d.display_name()));
+        ui.heading(format!("📀 {}", d.display_name(t.drives.unnamed_prefix)));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(
                 egui::RichText::new(if d.adr.is_empty() {

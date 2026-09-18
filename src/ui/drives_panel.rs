@@ -69,7 +69,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                         colors::DIM
                     };
 
-                    let title = d.display_name();
+                    let title = d.display_name(t.drives.unnamed_prefix);
                     let sub = if d.adr.is_empty() {
                         t.drives.address_unknown.to_string()
                     } else {

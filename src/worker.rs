@@ -16,6 +16,7 @@ use crate::ffi::{
     BURN_DRIVE_ADR_LEN, BURN_MSGS_MESSAGE_LEN, DiscStatus, DriveInfo, DriveStatus, Progress,
     RawLibburn, SpeedDescriptor, cbuf_to_string,
 };
+use crate::i18n::Lang;
 use crate::isofs::{ISO_MSGS_MESSAGE_LEN, ISO_SUCCESS, RawLibisofs};
 use crate::logger::Level;
 use crate::settings::BurnSettings;
@@ -135,12 +136,12 @@ pub struct DriveEntry {
 }
 
 impl DriveEntry {
-    pub fn display_name(&self) -> String {
+    pub fn display_name(&self, unnamed_prefix: &str) -> String {
         let name = format!("{} {}", self.vendor, self.product)
             .trim()
             .to_string();
         if name.is_empty() {
-            format!("Station {}", self.index)
+            format!("{unnamed_prefix} {}", self.index)
         } else {
             name
         }
@@ -195,6 +196,9 @@ pub enum Command {
     CancelBurn {
         index: usize,
     },
+    /// Interfacetaal bijwerken; de worker gebruikt deze voor zijn logregels
+    /// (stap 10b-6).
+    SetLanguage(Lang),
     Shutdown,
 }
 
@@ -345,6 +349,10 @@ struct WorkerState {
     isofs: Option<RawLibisofs>,
     infos: *mut DriveInfo,
     n_drives: usize,
+    /// Interfacetaal voor de logregels van de worker (stap 10b-6 gebruikt
+    /// dit; hier wordt alleen de taal bijgehouden).
+    #[allow(dead_code)]
+    lang: Lang,
 }
 
 /// Soort actieve job.
@@ -399,6 +407,8 @@ fn run(cmds: Receiver<Command>, events: Sender<Event>, ctx: egui::Context) {
     let mut pending: VecDeque<Command> = VecDeque::new();
     let mut active: Vec<ActiveJob> = Vec::new();
     let mut shutdown = false;
+    // Actieve taal in de worker; overleeft ook een herladning van libburn.
+    let mut lang = Lang::default();
 
     // Stap 9b: meerdere stations tegelijk. libburn draait brandjobs in eigen
     // threads; deze lus polt alle actieve jobs voor voortgang en afronding.
@@ -423,9 +433,15 @@ fn run(cmds: Receiver<Command>, events: Sender<Event>, ctx: egui::Context) {
 
         if let Some(cmd) = cmd {
             match cmd {
+                Command::SetLanguage(l) => {
+                    lang = l;
+                    if let Some(st) = state.as_mut() {
+                        st.lang = l;
+                    }
+                }
                 Command::LoadLibrary { path, exclusive } => {
                     if active.is_empty() {
-                        load_library(&mut state, path, exclusive, &notify);
+                        load_library(&mut state, path, exclusive, lang, &notify);
                     } else {
                         notify.log(
                             Level::Warning,
@@ -561,6 +577,7 @@ fn load_library(
     state: &mut Option<WorkerState>,
     custom: Option<String>,
     exclusive: bool,
+    lang: Lang,
     notify: &Notifier,
 ) {
     // Een eventueel eerdere sessie netjes afsluiten.
@@ -631,6 +648,7 @@ fn load_library(
                 *state = Some(WorkerState {
                     raw,
                     isofs,
+                    lang,
                     infos: std::ptr::null_mut(),
                     n_drives: 0,
                 });
@@ -3371,7 +3389,7 @@ mod tests {
                 Ok(Event::ScanDone { drives }) => {
                     eprintln!("ScanDone: {} station(s)", drives.len());
                     for d in &drives {
-                        eprintln!("  - {} @ {}", d.display_name(), d.adr);
+                        eprintln!("  - {} @ {}", d.display_name("Station"), d.adr);
                     }
                     terminal = true;
                     break;

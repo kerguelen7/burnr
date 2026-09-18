@@ -263,17 +263,15 @@ impl App {
                 if let Some(l) = p.language {
                     app.lang = l;
                 }
-                app.log.push(
-                    Level::Info,
-                    "Instellingen geladen uit vorige sessie".to_string(),
-                );
+                app.log
+                    .push(Level::Info, app.lang.texts().app_log.settings_loaded);
             }
         }
 
-        app.log.push(
-            Level::Info,
-            "Burnr gestart — libburn wordt van het systeem geladen…".to_string(),
-        );
+        // De worker start op de default-taal; stuur de (mogelijk geladen)
+        // taal direct mee zodat diens logregels later meelopen (10b-6).
+        app.send(Command::SetLanguage(app.lang));
+        app.log.push(Level::Info, app.lang.texts().app_log.started);
         app.send(Command::LoadLibrary {
             path: None,
             exclusive: app.exclusive_open,
@@ -281,10 +279,20 @@ impl App {
         app
     }
 
+    /// Interfacetaal bijwerken en de worker meenemen (diens logregels
+    /// volgen in 10b-6).
+    pub fn set_language(&mut self, lang: Lang) {
+        if self.lang == lang {
+            return;
+        }
+        self.lang = lang;
+        self.send(Command::SetLanguage(lang));
+    }
+
     fn send(&mut self, cmd: Command) {
         if self.cmd_tx.send(cmd).is_err() {
             self.log
-                .push(Level::Error, "Worker-thread is gestopt".to_string());
+                .push(Level::Error, self.lang.texts().app_log.worker_stopped);
         }
     }
 
@@ -292,7 +300,8 @@ impl App {
         if self.scan_state == ScanState::Scanning {
             return;
         }
-        self.log.push(Level::Info, "Scan aangevraagd".to_string());
+        self.log
+            .push(Level::Info, self.lang.texts().app_log.scan_requested);
         self.send(Command::Scan);
     }
 
@@ -302,7 +311,7 @@ impl App {
         }
         self.log.push(
             Level::Info,
-            format!("Inspectie aangevraagd voor station {index}"),
+            format!("{} {index}", self.lang.texts().app_log.inspect_requested),
         );
         self.send(Command::InspectDrive(index));
     }
@@ -310,12 +319,9 @@ impl App {
     pub fn reload_library(&mut self, path: Option<String>) {
         self.lib_state = LibState::Loading;
         self.auto_scan_queued = true;
-        self.log
-            .push(Level::Info, "libburn (opnieuw) laden…".to_string());
-        self.log.push(
-            Level::Info,
-            "Automatische scan volgt na het herladen.".to_string(),
-        );
+        let t = &self.lang.texts().app_log;
+        self.log.push(Level::Info, t.reloading);
+        self.log.push(Level::Info, t.rescan_after_reload);
         self.send(Command::LoadLibrary {
             path,
             exclusive: self.exclusive_open,
@@ -339,14 +345,14 @@ impl App {
         let expanded = expand_home(&path);
         if expanded.trim().is_empty() {
             self.log
-                .push(Level::Warning, "Geen uitvoerbestand opgegeven".to_string());
+                .push(Level::Warning, self.lang.texts().app_log.no_output_file);
             return;
         }
         self.log.push(
             Level::Info,
             format!(
-                "Schijfkopie aangevraagd voor station {index} → `{}`",
-                expanded
+                "{} {index} → `{expanded}`",
+                self.lang.texts().app_log.read_requested
             ),
         );
         self.send(Command::ReadDisc {
@@ -358,7 +364,7 @@ impl App {
     pub fn cancel_read(&mut self) {
         if self.active_read.is_some() {
             self.log
-                .push(Level::Info, "Kopie annuleren aangevraagd".to_string());
+                .push(Level::Info, self.lang.texts().app_log.cancel_read_requested);
             self.send(Command::CancelRead);
         }
     }
@@ -370,22 +376,20 @@ impl App {
         let expanded = expand_home(&path);
         if expanded.trim().is_empty() {
             self.log
-                .push(Level::Warning, "Geen ISO-bestand opgegeven".to_string());
+                .push(Level::Warning, self.lang.texts().app_log.no_iso_file);
             return;
         }
         if !std::path::Path::new(&expanded).is_file() {
             self.log.push(
                 Level::Warning,
-                format!("ISO-bestand bestaat niet: `{}`", expanded),
+                format!("{}: `{expanded}`", self.lang.texts().app_log.iso_missing),
             );
             return;
         }
+        let t = &self.lang.texts().app_log;
         self.log.push(
             Level::Info,
-            format!(
-                "Brandjob aangevraagd voor station {index} met `{}`",
-                expanded
-            ),
+            format!("{} {index} {} `{expanded}`", t.burn_requested, t.with_word),
         );
         self.send(Command::BurnDisc {
             index,
@@ -397,7 +401,7 @@ impl App {
     pub fn cancel_burn(&mut self, index: usize) {
         if self.active_burns.iter().any(|b| b.index == index) {
             self.log
-                .push(Level::Info, "Brandjob annuleren aangevraagd".to_string());
+                .push(Level::Info, self.lang.texts().app_log.cancel_burn_requested);
             self.send(Command::CancelBurn { index });
         }
     }
@@ -406,7 +410,7 @@ impl App {
         if self.active_maints.iter().any(|m| m.index == index) {
             self.log.push(
                 Level::Info,
-                "Onderhoudsjob annuleren aangevraagd".to_string(),
+                self.lang.texts().app_log.cancel_maint_requested,
             );
             self.send(Command::CancelBurn { index });
         }
@@ -416,11 +420,13 @@ impl App {
         if self.active_read.is_some() || self.busy_drive.is_some() || self.job_active_on(index) {
             return;
         }
+        let t = &self.lang.texts().app_log;
         self.log.push(
             Level::Info,
             format!(
-                "Wissen aangevraagd voor station {index} ({})",
-                if fast { "snel" } else { "volledig" }
+                "{} {index} ({})",
+                t.erase_requested,
+                if fast { t.quick_word } else { t.full_word }
             ),
         );
         self.send(Command::EraseDisc { index, fast });
@@ -431,7 +437,7 @@ impl App {
             return;
         }
         self.log
-            .push(Level::Info, "Herstelpoging aangevraagd".to_string());
+            .push(Level::Info, self.lang.texts().app_log.restore_requested);
         self.send(Command::FormatDisc {
             index,
             settings: self.settings.clone(),
@@ -513,10 +519,8 @@ impl App {
             return;
         }
         if self.burn_files.is_empty() {
-            self.log.push(
-                Level::Warning,
-                "Geen bestanden gekozen om te branden".to_string(),
-            );
+            self.log
+                .push(Level::Warning, self.lang.texts().app_log.no_burn_files);
             return;
         }
         let volume = if self.volume_id.trim().is_empty() {
@@ -540,12 +544,14 @@ impl App {
             .map(|s| s.start_lba)
             .filter(|&b| b >= 0)
             .filter(|_| import_active);
+        let t = self.lang.texts();
         self.log.push(
             Level::Info,
             format!(
-                "Data-image branden aangevraagd voor station {index} — {} item(s), \
-                 ≈ {}",
+                "{} {index} — {} {}, ≈ {}",
+                t.app_log.burn_data_requested,
                 self.burn_files.len(),
+                t.burn.items_word,
                 crate::worker::format_blocks(self.burn_files_size.div_ceil(2048) as i32)
             ),
         );
@@ -565,10 +571,8 @@ impl App {
                 self.lib_state = LibState::Loaded { version, path };
                 if self.auto_scan_queued {
                     self.auto_scan_queued = false;
-                    self.log.push(
-                        Level::Info,
-                        "Automatische scan na herladen gestart".to_string(),
-                    );
+                    self.log
+                        .push(Level::Info, self.lang.texts().app_log.auto_scan_started);
                     self.send(Command::Scan);
                 }
             }
@@ -667,7 +671,7 @@ impl App {
                     buffer_pct: 0.0,
                     fifo_pct: 0.0,
                     simulate,
-                    phase: "starten…".to_string(),
+                    phase: self.lang.texts().burn.phase_starting.to_string(),
                     elapsed_secs: 0.0,
                     eta_secs: 0.0,
                 });
@@ -703,10 +707,8 @@ impl App {
                 if !self.burn_files.is_empty() {
                     self.burn_files.clear();
                     self.burn_files_size = 0;
-                    self.log.push(
-                        Level::Info,
-                        "Bestandenlijst gewist na geslaagde brand".to_string(),
-                    );
+                    self.log
+                        .push(Level::Info, self.lang.texts().app_log.files_cleared);
                 }
                 self.bump_volume_label();
             }
@@ -745,10 +747,8 @@ impl App {
                 self.active_maints.retain(|m| m.index != index);
                 // Na wissen/formatteren is de getoonde mediastatus verouderd;
                 // automatisch opnieuw inspecteren voor verse gegevens.
-                self.log.push(
-                    Level::Info,
-                    "Automatische herinspectie na onderhoud…".to_string(),
-                );
+                self.log
+                    .push(Level::Info, self.lang.texts().app_log.reinspect_after_maint);
                 self.request_inspect(index);
             }
             Event::MaintFailed { index, error, .. } => {
@@ -765,8 +765,10 @@ impl App {
                     d.media = None;
                     d.inspect_error = None;
                 }
-                self.log
-                    .push(Level::Info, "Mediagegevens gewist na eject".to_string());
+                self.log.push(
+                    Level::Info,
+                    self.lang.texts().app_log.media_cleared_after_eject,
+                );
             }
             Event::WorkerStopped => {}
         }

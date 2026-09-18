@@ -67,7 +67,8 @@ pub struct Texts {
     pub burn: BurnTexts,
     pub image: DiscImageTexts,
     pub maint: MaintTexts,
-    // Groeit mee met de migratie: logmeldingen (app/worker), help.
+    pub app_log: AppLogTexts,
+    // Groeit mee met de migratie: logmeldingen (worker), help.
 }
 
 /// Gedeelde teksten over meerdere panels heen.
@@ -397,6 +398,8 @@ impl SettingsTexts {
 /// Linkerpaneel met de stationslijst.
 pub struct DrivesTexts {
     pub title: &'static str,
+    /// Voor stations zonder naam: "Station 1" / "Drive 1" / "Laufwerk 1".
+    pub unnamed_prefix: &'static str,
     pub scanning: &'static str,
     /// Prefix "Scan mislukt" — de UI plakt ": {error}" erachter.
     pub scan_failed_prefix: &'static str,
@@ -449,6 +452,8 @@ pub struct BurnTexts {
     pub done_phase_prefix: &'static str,
     /// "Fase" — de UI plakt ": {}" aan.
     pub phase_prefix: &'static str,
+    /// Eerste fase-waarde bij de start van een brandjob.
+    pub phase_starting: &'static str,
     pub sector_word: &'static str,
     pub buffer_word: &'static str,
     pub elapsed_word: &'static str,
@@ -497,6 +502,45 @@ impl MaintTexts {
             MaintKind::Format => self.kind_restore,
         }
     }
+}
+
+/// Logmeldingen die de App zelf pusht (levenscyclus, verzoeken, events).
+/// Meldingen met variabelen bestaan uit een prefix-veld; de aanroepplek
+/// plakt de argumenten er met `format!` achter — zo blijft de woordvolgorde
+/// per taal vrij (Duits zet de werkwoordsvorm achteraan).
+pub struct AppLogTexts {
+    pub started: &'static str,
+    pub settings_loaded: &'static str,
+    pub worker_stopped: &'static str,
+    pub scan_requested: &'static str,
+    /// + " {index}"
+    pub inspect_requested: &'static str,
+    pub reloading: &'static str,
+    pub rescan_after_reload: &'static str,
+    pub auto_scan_started: &'static str,
+    pub no_output_file: &'static str,
+    /// + " {index} → `{path}`"
+    pub read_requested: &'static str,
+    pub cancel_read_requested: &'static str,
+    pub no_iso_file: &'static str,
+    /// + ": `{path}`"
+    pub iso_missing: &'static str,
+    /// + " {index} {with_word} `{path}`"
+    pub burn_requested: &'static str,
+    pub with_word: &'static str,
+    pub cancel_burn_requested: &'static str,
+    pub cancel_maint_requested: &'static str,
+    /// + " {index} ({quick|full})"
+    pub erase_requested: &'static str,
+    pub quick_word: &'static str,
+    pub full_word: &'static str,
+    pub restore_requested: &'static str,
+    pub no_burn_files: &'static str,
+    /// + " {index} — {n} {items_word}, ≈ {size}"
+    pub burn_data_requested: &'static str,
+    pub files_cleared: &'static str,
+    pub reinspect_after_maint: &'static str,
+    pub media_cleared_after_eject: &'static str,
 }
 
 /// en-US: brontaal (terminologie volgens `docs/i18n-glossary.md`).
@@ -558,6 +602,7 @@ const EN_US: Texts = Texts {
     },
     drives: DrivesTexts {
         title: "Drives",
+        unnamed_prefix: "Drive",
         scanning: "Scanning…",
         scan_failed_prefix: "Scan failed",
         hint_automount: "No drives found while “Exclusive open” is on. A mounted disc (automount) can block the drive — turn the mode off (Settings → Device) and scan again.",
@@ -702,6 +747,7 @@ const EN_US: Texts = Texts {
         uses_settings_hint: "Uses the settings on the right: speed, write mode, simulation, multi-session, padding. Erase and the restore attempt are under Maintenance on the media island.",
         done_phase_prefix: "100% written — drive still busy:",
         phase_prefix: "Phase",
+        phase_starting: "starting…",
         sector_word: "sector",
         buffer_word: "buffer",
         elapsed_word: "⏱ elapsed",
@@ -733,6 +779,34 @@ const EN_US: Texts = Texts {
         not_rewritable_hint: "This media is not rewritable — erasing or a restore attempt is not possible.",
         kind_erase: "erasing",
         kind_restore: "restoring",
+    },
+    app_log: AppLogTexts {
+        started: "Burnr started — loading libburn from the system…",
+        settings_loaded: "Settings loaded from previous session",
+        worker_stopped: "Worker thread has stopped",
+        scan_requested: "Scan requested",
+        inspect_requested: "Inspect requested for drive",
+        reloading: "loading libburn (again)…",
+        rescan_after_reload: "Automatic scan follows after the reload.",
+        auto_scan_started: "Automatic scan after reload started",
+        no_output_file: "No output file given",
+        read_requested: "Disc copy requested for drive",
+        cancel_read_requested: "Copy cancellation requested",
+        no_iso_file: "No ISO file given",
+        iso_missing: "ISO file does not exist",
+        burn_requested: "Burn requested for drive",
+        with_word: "with",
+        cancel_burn_requested: "Burn cancellation requested",
+        cancel_maint_requested: "Maintenance cancellation requested",
+        erase_requested: "Erase requested for drive",
+        quick_word: "quick",
+        full_word: "full",
+        restore_requested: "Restore attempt requested",
+        no_burn_files: "No files selected to burn",
+        burn_data_requested: "Data image burn requested for drive",
+        files_cleared: "File list cleared after successful burn",
+        reinspect_after_maint: "Automatic re-inspection after maintenance…",
+        media_cleared_after_eject: "Media info cleared after eject",
     },
 };
 
@@ -796,6 +870,7 @@ const NL_NL: Texts = Texts {
     },
     drives: DrivesTexts {
         title: "Stations",
+        unnamed_prefix: "Station",
         scanning: "Bezig met scannen…",
         scan_failed_prefix: "Scan mislukt",
         hint_automount: "Geen stations gevonden terwijl “Exclusief openen” aan staat. Een aangekoppelde schijf (automount) kan de drive blokkeren — zet de modus uit (Instellingen → Apparaat) en scan opnieuw.",
@@ -940,6 +1015,7 @@ const NL_NL: Texts = Texts {
         uses_settings_hint: "Gebruikt de instellingen rechts: snelheid, schrijfmodus, simulatie, multi-session, padding. Wissen en de herstelpoging gaan via Onderhoud in het Media-eiland.",
         done_phase_prefix: "100% geschreven — drive is nog bezig:",
         phase_prefix: "Fase",
+        phase_starting: "starten…",
         sector_word: "sector",
         buffer_word: "buffer",
         elapsed_word: "⏱ verstreken",
@@ -971,6 +1047,34 @@ const NL_NL: Texts = Texts {
         not_rewritable_hint: "Deze media is niet herbeschrijfbaar — wissen of een herstelpoging is niet mogelijk.",
         kind_erase: "wissen",
         kind_restore: "herstellen",
+    },
+    app_log: AppLogTexts {
+        started: "Burnr gestart — libburn wordt van het systeem geladen…",
+        settings_loaded: "Instellingen geladen uit vorige sessie",
+        worker_stopped: "Worker-thread is gestopt",
+        scan_requested: "Scan aangevraagd",
+        inspect_requested: "Inspectie aangevraagd voor station",
+        reloading: "libburn (opnieuw) laden…",
+        rescan_after_reload: "Automatische scan volgt na het herladen.",
+        auto_scan_started: "Automatische scan na herladen gestart",
+        no_output_file: "Geen uitvoerbestand opgegeven",
+        read_requested: "Schijfkopie aangevraagd voor station",
+        cancel_read_requested: "Kopie annuleren aangevraagd",
+        no_iso_file: "Geen ISO-bestand opgegeven",
+        iso_missing: "ISO-bestand bestaat niet",
+        burn_requested: "Brandjob aangevraagd voor station",
+        with_word: "met",
+        cancel_burn_requested: "Brandjob annuleren aangevraagd",
+        cancel_maint_requested: "Onderhoudsjob annuleren aangevraagd",
+        erase_requested: "Wissen aangevraagd voor station",
+        quick_word: "snel",
+        full_word: "volledig",
+        restore_requested: "Herstelpoging aangevraagd",
+        no_burn_files: "Geen bestanden gekozen om te branden",
+        burn_data_requested: "Data-image branden aangevraagd voor station",
+        files_cleared: "Bestandenlijst gewist na geslaagde brand",
+        reinspect_after_maint: "Automatische herinspectie na onderhoud…",
+        media_cleared_after_eject: "Mediagegevens gewist na eject",
     },
 };
 
@@ -1034,6 +1138,7 @@ const DE_DE: Texts = Texts {
     },
     drives: DrivesTexts {
         title: "Laufwerke",
+        unnamed_prefix: "Laufwerk",
         scanning: "Wird gescannt…",
         scan_failed_prefix: "Scan fehlgeschlagen",
         hint_automount: "Keine Laufwerke gefunden, während „Exklusiv öffnen“ aktiv ist. Eine eingehängte Disc (Automount) kann das Laufwerk blockieren — Modus ausschalten (Einstellungen → Gerät) und erneut scannen.",
@@ -1178,6 +1283,7 @@ const DE_DE: Texts = Texts {
         uses_settings_hint: "Verwendet die Einstellungen rechts: Geschwindigkeit, Schreibmodus, Simulation, Multi-Session, Padding. Löschen und der Herstellungsversuch laufen über Wartung auf der Medieninsel.",
         done_phase_prefix: "100% geschrieben — Laufwerk ist noch beschäftigt:",
         phase_prefix: "Phase",
+        phase_starting: "startet…",
         sector_word: "Sektor",
         buffer_word: "Puffer",
         elapsed_word: "⏱ vergangen",
@@ -1209,5 +1315,33 @@ const DE_DE: Texts = Texts {
         not_rewritable_hint: "Dieses Medium ist nicht wiederbeschreibbar — Löschen oder ein Herstellungsversuch ist nicht möglich.",
         kind_erase: "wird gelöscht",
         kind_restore: "Herstellungsversuch läuft",
+    },
+    app_log: AppLogTexts {
+        started: "Burnr gestartet — libburn wird vom System geladen…",
+        settings_loaded: "Einstellungen aus der vorherigen Sitzung geladen",
+        worker_stopped: "Worker-Thread wurde beendet",
+        scan_requested: "Scan angefragt",
+        inspect_requested: "Inspektionsanfrage für Laufwerk",
+        reloading: "libburn (neu) laden…",
+        rescan_after_reload: "Automatischer Scan folgt nach dem Neuladen.",
+        auto_scan_started: "Automatischer Scan nach dem Neuladen gestartet",
+        no_output_file: "Keine Ausgabedatei angegeben",
+        read_requested: "Disc-Kopie angefragt für Laufwerk",
+        cancel_read_requested: "Abbruch der Kopie angefragt",
+        no_iso_file: "Keine ISO-Datei angegeben",
+        iso_missing: "ISO-Datei existiert nicht",
+        burn_requested: "Brennauftrag für Laufwerk",
+        with_word: "mit",
+        cancel_burn_requested: "Abbruch des Brennauftrags angefragt",
+        cancel_maint_requested: "Abbruch des Wartungsauftrags angefragt",
+        erase_requested: "Löschanfrage für Laufwerk",
+        quick_word: "schnell",
+        full_word: "vollständig",
+        restore_requested: "Herstellungsversuch angefragt",
+        no_burn_files: "Keine Dateien zum Brennen ausgewählt",
+        burn_data_requested: "Data-Image-Brennauftrag für Laufwerk",
+        files_cleared: "Dateiliste nach erfolgreichem Brennen geleert",
+        reinspect_after_maint: "Automatische Neuinspektion nach Wartung…",
+        media_cleared_after_eject: "Medieninformationen nach Auswurf gelöscht",
     },
 };

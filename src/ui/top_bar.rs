@@ -46,15 +46,20 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                 }
 
                 // Taalkeuze: endoniemen (English/Nederlands/Deutsch) zijn
-                // taalneutraal en hoeven dus niet vertaald te worden.
+                // taalneutraal en hoeven dus niet vertaald te worden. De
+                // worker krijgt de wissel mee zodat zijn logregels volgen.
+                let mut want = app.lang;
                 egui::ComboBox::from_id_salt("lang_choice")
                     .selected_text(app.lang.endonym())
                     .width(110.0)
                     .show_ui(ui, |ui| {
                         for lang in Lang::ALL {
-                            ui.selectable_value(&mut app.lang, lang, lang.endonym());
+                            ui.selectable_value(&mut want, lang, lang.endonym());
                         }
                     });
+                if want != app.lang {
+                    app.set_language(want);
+                }
             });
         });
         ui.add_space(4.0);
