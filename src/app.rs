@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use egui::Color32;
 
-use crate::logger::{Level, LogStore};
+use crate::i18n::Lang;
+use crate::logger::{Level, LogFilter, LogStore};
 use crate::settings::BurnSettings;
 use crate::ui;
 use crate::worker::{self, Command, DriveEntry, Event};
@@ -46,6 +47,7 @@ pub struct PersistedState {
     pub burn_path: Option<String>,
     pub read_path: Option<String>,
     pub log_filter: Option<[bool; 4]>,
+    pub language: Option<Lang>,
 }
 
 impl PersistedState {
@@ -56,7 +58,8 @@ impl PersistedState {
             burn_source_kind: Some(app.burn_source_kind),
             burn_path: Some(app.burn_path.clone()),
             read_path: Some(app.read_path.clone()),
-            log_filter: Some(app.log_filter),
+            log_filter: Some(app.log_filter.0),
+            language: Some(app.lang),
         }
     }
 }
@@ -169,8 +172,10 @@ pub struct App {
     auto_scan_queued: bool,
     /// Pad naar een libburn-shared object, ingevuld door de gebruiker.
     pub custom_so: String,
-    pub log_filter: [bool; 4],
+    pub log_filter: LogFilter,
     pub auto_scroll: bool,
+    /// Interfacetaal (stap 10b; de tekstcatalogus groeit per deel-stap).
+    pub lang: Lang,
     /// App-icoon als egui-texture voor de top bar (één keer gedecodeerd).
     pub icon: Option<egui::TextureHandle>,
 }
@@ -226,8 +231,9 @@ impl App {
             worker: Some(handle),
             auto_scan_queued: true,
             custom_so: String::new(),
-            log_filter: [true, true, true, true],
+            log_filter: LogFilter::default(),
             auto_scroll: true,
+            lang: Lang::default(),
             icon,
         };
 
@@ -252,7 +258,10 @@ impl App {
                     app.read_path = v;
                 }
                 if let Some(v) = p.log_filter {
-                    app.log_filter = v;
+                    app.log_filter = LogFilter(v);
+                }
+                if let Some(l) = p.language {
+                    app.lang = l;
                 }
                 app.log.push(
                     Level::Info,
@@ -537,7 +546,7 @@ impl App {
                 "Data-image branden aangevraagd voor station {index} — {} item(s), \
                  ≈ {}",
                 self.burn_files.len(),
-                crate::worker::format_blocks(((self.burn_files_size + 2047) / 2048) as i32)
+                crate::worker::format_blocks(self.burn_files_size.div_ceil(2048) as i32)
             ),
         );
         self.send(Command::BurnFiles {

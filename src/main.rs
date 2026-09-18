@@ -6,6 +6,7 @@
 
 mod app;
 mod ffi;
+mod i18n;
 mod isofs;
 mod logger;
 mod settings;

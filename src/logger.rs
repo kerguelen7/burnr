@@ -3,6 +3,7 @@
 
 use chrono::Local;
 use egui::Color32;
+use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
@@ -16,6 +17,16 @@ pub enum Level {
 }
 
 impl Level {
+    /// Volgorde van de filter-schakelaars in het logpaneel — tegelijk de
+    /// indexvolgorde van [`LogFilter`] en van de persistentie (`[bool; 4]`).
+    pub const FILTER_ORDER: [Level; 4] =
+        [Level::Info, Level::Success, Level::Warning, Level::Error];
+
+    /// Index in [`Level::FILTER_ORDER`] / [`LogFilter`] (declaratievolgorde).
+    pub fn slot(self) -> usize {
+        self as usize
+    }
+
     pub fn tag(self) -> &'static str {
         match self {
             Level::Info => "INFO",
@@ -109,5 +120,29 @@ impl LogStore {
 
     pub fn clear(&mut self) {
         self.entries.clear();
+    }
+}
+
+/// Welke logniveaus het logpaneel toont. De vlaggen staan in dezelfde
+/// volgorde als [`Level::FILTER_ORDER`]; de persistentie blijft een
+/// `[bool; 4]` (stap 8), dus oude opslagbestanden laden zonder migratie.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LogFilter(pub [bool; 4]);
+
+impl Default for LogFilter {
+    fn default() -> Self {
+        Self([true; 4])
+    }
+}
+
+impl LogFilter {
+    /// Is dit niveau zichtbaar in het logpaneel?
+    pub fn allows(self, level: Level) -> bool {
+        self.0[level.slot()]
+    }
+
+    /// Zet de zichtbaarheid van een logniveau.
+    pub fn set(&mut self, level: Level, on: bool) {
+        self.0[level.slot()] = on;
     }
 }

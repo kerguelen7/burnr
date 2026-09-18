@@ -733,7 +733,7 @@ fn scan(
 }
 
 fn drive_entry_from_raw(index: usize, di: &DriveInfo, raw: &RawLibburn) -> DriveEntry {
-    let f = di.flags as u32;
+    let f = di.flags;
     let bit = |n: u32| (f >> n) & 1 != 0;
 
     let adr = unsafe { adr_of(di, raw) };
@@ -753,9 +753,7 @@ fn drive_entry_from_raw(index: usize, di: &DriveInfo, raw: &RawLibburn) -> Drive
         ) == 1
             && num > 0
         {
-            for i in 0..num as usize {
-                supported_profiles.push(profiles[i]);
-            }
+            supported_profiles.extend_from_slice(&profiles[..num as usize]);
         }
     }
 
@@ -985,7 +983,7 @@ fn inspect(state: Option<&WorkerState>, index: usize, notify: &Notifier) {
             }
 
             // Defect management-status bij BD-media (spare-gebieden).
-            if matches!(profile_no, 0x41 | 0x42 | 0x43) {
+            if matches!(profile_no, 0x41..=0x43) {
                 let (mut alloc, mut free_b): (c_int, c_int) = (0, 0);
                 let r = (st.raw.disc_get_bd_spare_info)(di.drive, &mut alloc, &mut free_b, 0);
                 if r == 1 && alloc > 0 {
@@ -1264,10 +1262,8 @@ fn burn_job(
     if file_size % 2048 != 0 {
         notify.log(
             Level::Info,
-            format!(
-                "Bestandsgrootte is geen veelvoud van 2048 bytes; laatste sector wordt \
-                 aangevuld met nullen"
-            ),
+            "Bestandsgrootte is geen veelvoud van 2048 bytes; laatste sector wordt \
+             aangevuld met nullen",
         );
     }
     let expected_sectors = ((file_size as i64 + 2047) / 2048) as i32;
@@ -1552,7 +1548,7 @@ fn burn_files_job(
             (iso.read_opts_set_start_block)(ropts, start_block as c_uint);
             let mut features: *mut crate::isofs::IsoReadImageFeatures = std::ptr::null_mut();
             let r = (iso.image_import)(image, ds, ropts, &mut features);
-            if features.is_null() == false {
+            if !features.is_null() {
                 let blocks = (iso.read_image_features_get_size)(features);
                 notify.log(
                     Level::Info,

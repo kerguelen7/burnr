@@ -1,29 +1,30 @@
 //! Onderpaneel: feedback-log met niveaufilter en auto-scroll.
 
 use crate::app::App;
+use crate::i18n::LogTexts;
 use crate::logger::Level;
 use crate::ui::colors;
 
 pub fn show(ui: &mut egui::Ui, app: &mut App) {
+    let t = app.lang.texts();
     egui::Panel::bottom("log_panel")
         .default_size(190.0)
         .resizable(true)
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Log").strong());
+                ui.label(egui::RichText::new(t.log.title).strong());
                 ui.separator();
-                ui.label(egui::RichText::new("toon:").small());
-                filter_toggle(ui, app, 0, "info");
-                filter_toggle(ui, app, 1, "ok");
-                filter_toggle(ui, app, 2, "waarschuwing");
-                filter_toggle(ui, app, 3, "fout");
+                ui.label(egui::RichText::new(t.log.show).small());
+                for level in Level::FILTER_ORDER {
+                    filter_toggle(ui, app, level, &t.log);
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("Wissen").clicked() {
+                    if ui.small_button(t.log.clear).clicked() {
                         app.log.clear();
                     }
                     if ui
-                        .small_button("💾 Opslaan…")
-                        .on_hover_text("Sla de zichtbare logregels op in een bestand")
+                        .small_button(t.log.save)
+                        .on_hover_text(t.log.save_hover)
                         .clicked()
                     {
                         if let Some(p) = rfd::FileDialog::new()
@@ -45,23 +46,25 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                                     let _ = f.flush();
                                     app.log.push(
                                         Level::Success,
-                                        format!("Log opgeslagen: {}", p.display()),
+                                        format!("{}: {}", t.log.saved_prefix, p.display()),
                                     );
                                 }
                                 Err(e) => {
-                                    app.log
-                                        .push(Level::Error, format!("Log opslaan mislukt: {e}"));
+                                    app.log.push(
+                                        Level::Error,
+                                        format!("{}: {e}", t.log.save_failed_prefix),
+                                    );
                                 }
                             }
                         }
                     }
-                    ui.checkbox(&mut app.auto_scroll, "auto-scroll");
+                    ui.checkbox(&mut app.auto_scroll, t.log.auto_scroll);
                 });
             });
             ui.separator();
             if let Some(p) = &app.log_file {
                 ui.label(
-                    egui::RichText::new(format!("Sessielog: {}", p.display()))
+                    egui::RichText::new(format!("{}: {}", t.log.session_log, p.display()))
                         .small()
                         .color(colors::DIM),
                 );
@@ -71,13 +74,13 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                 .stick_to_bottom(app.auto_scroll)
                 .show(ui, |ui| {
                     for e in app.log.entries() {
-                        if !app.log_filter[level_index(e.level)] {
+                        if !app.log_filter.allows(e.level) {
                             continue;
                         }
                         ui.horizontal_wrapped(|ui| {
                             ui.monospace(egui::RichText::new(&e.time).small().color(colors::DIM));
                             ui.monospace(
-                                egui::RichText::new(e.level.tag())
+                                egui::RichText::new(t.log.level_tag(e.level))
                                     .small()
                                     .color(e.level.color()),
                             );
@@ -88,18 +91,9 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
         });
 }
 
-fn filter_toggle(ui: &mut egui::Ui, app: &mut App, idx: usize, label: &str) {
-    let mut on = app.log_filter[idx];
-    if ui.toggle_value(&mut on, label).changed() {
-        app.log_filter[idx] = on;
-    }
-}
-
-fn level_index(level: Level) -> usize {
-    match level {
-        Level::Info => 0,
-        Level::Success => 1,
-        Level::Warning => 2,
-        Level::Error => 3,
+fn filter_toggle(ui: &mut egui::Ui, app: &mut App, level: Level, t: &LogTexts) {
+    let mut on = app.log_filter.allows(level);
+    if ui.toggle_value(&mut on, t.filter_label(level)).changed() {
+        app.log_filter.set(level, on);
     }
 }

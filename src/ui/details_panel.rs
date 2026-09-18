@@ -324,7 +324,7 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
                     _ => "geen leesbare data (bijv. CD-audio)".to_string(),
                 },
             };
-            let dm_val = if matches!(media.profile_no, 0x41 | 0x42 | 0x43) {
+            let dm_val = if matches!(media.profile_no, 0x41..=0x43) {
                 match media.bd_spare {
                     Some((alloc, free)) => {
                         format!("actief (vrij {free} van {alloc})")
@@ -561,7 +561,7 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
                     )
                 })
                 .collect();
-            opts.sort_by(|a, b| b.0.cmp(&a.0));
+            opts.sort_by_key(|o| std::cmp::Reverse(o.0));
             opts.dedup_by(|a, b| a.0 == b.0);
             opts
         })
@@ -678,7 +678,7 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
                     });
                 ui.label(format!(
                     "≈ {} (schatting, {} item(s))",
-                    crate::worker::format_blocks(((app.burn_files_size + 2047) / 2048) as i32),
+                    crate::worker::format_blocks(app.burn_files_size.div_ceil(2048) as i32),
                     app.burn_files.len()
                 ));
             }
