@@ -3260,20 +3260,20 @@ pub fn profile_fallback_name(pno: i32) -> &'static str {
         0x09 => "CD-R",
         0x0A => "CD-RW",
         0x10 => "DVD-ROM",
-        0x11 => "DVD-R sequentieel",
+        0x11 => "DVD-R sequential",
         0x12 => "DVD-RAM",
         0x13 => "DVD-RW restricted overwrite",
-        0x14 => "DVD-RW sequentieel",
-        0x15 => "DVD-R DL sequentieel",
+        0x14 => "DVD-RW sequential",
+        0x15 => "DVD-R DL sequential",
         0x16 => "DVD-R DL layer jump",
         0x1A => "DVD+RW",
         0x1B => "DVD+R",
         0x2B => "DVD+R DL",
         0x40 => "BD-ROM",
         0x41 => "BD-R random recording",
-        0x42 => "BD-R sequentieel",
+        0x42 => "BD-R sequential",
         0x43 => "BD-RE",
-        0xFFFF => "stdio-bestand",
+        0xFFFF => "stdio file",
         _ => "",
     }
 }
@@ -3324,16 +3324,8 @@ pub fn drive_status_label(s: DriveStatus) -> &'static str {
     }
 }
 
-/// Bron van een snelheidsdescriptor (zie libburn.h).
-pub fn speed_source_label(source: i32) -> &'static str {
-    match source {
-        1 => "mode page 2Ah",
-        2 => "GET PERFORMANCE",
-        3 => "GET PERFORMANCE (lees)",
-        _ => "overig",
-    }
-}
-
+/// Bron van een snelheidsdescriptor (zie libburn.h) — UI-labels staan in de
+/// i18n-catalogus (MediaTexts::speed_source_label).
 /// Zet kB/s om naar een leesbare ×CD/×DVD/×BD-indicatie op basis van het
 /// actieve SCSI-profiel (CD: 0x08–0x0A, DVD: 0x10–0x2F, BD: 0x40–0x42).
 pub fn speed_multiplier_label(profile_loaded: i32, kbps: i32) -> String {

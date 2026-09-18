@@ -2,20 +2,19 @@
 
 use crate::app::{App, LibState, ScanState};
 use crate::ffi::DiscStatus;
+use crate::i18n::{CommonTexts, MediaTexts};
 use crate::ui::colors;
-use crate::worker::{
-    disc_label, drive_status_label, format_blocks, profile_fallback_name, speed_multiplier_label,
-    speed_source_label,
-};
+use crate::worker::{format_blocks, profile_fallback_name, speed_multiplier_label};
 
 pub fn show(ui: &mut egui::Ui, app: &mut App) {
+    let t = app.lang.texts();
     egui::CentralPanel::default().show(ui, |ui| {
         match &app.lib_state {
             LibState::Loading => {
                 ui.vertical_centered(|ui| {
                     ui.add_space(40.0);
                     ui.spinner();
-                    ui.label("libburn wordt geladen…");
+                    ui.label(t.details.loading);
                 });
             }
             LibState::Failed { error } => {
@@ -26,7 +25,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                 None => {
                     ui.vertical_centered(|ui| {
                         ui.add_space(40.0);
-                        ui.weak("Selecteer links een station om de details te zien.");
+                        ui.weak(t.details.select_hint);
                     });
                 }
                 Some(i) => {
@@ -40,27 +39,25 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
 }
 
 fn lib_failed_card(ui: &mut egui::Ui, app: &mut App, error: &str) {
+    let t = app.lang.texts();
     ui.group(|ui| {
-        ui.colored_label(colors::BAD, "⚠ libburn kon niet geladen worden");
+        ui.colored_label(colors::BAD, t.details.lib_failed_title);
         ui.weak(error);
         ui.separator();
-        ui.label(
-            "Deze GUI gebruikt de libburn die op je systeem staat (runtime-linking, \
-             niet meegecompileerd).",
-        );
-        ui.label("• Installeer de runtime:  sudo apt install libburn4   (Debian/Ubuntu)");
-        ui.label("• Of wijs hieronder een libburn-shared object aan (bijv. /usr/lib/x86_64-linux-gnu/libburn.so.4)");
-        ui.label("• Of start met de omgevingsvariabele:  LIBBURN_SO=/pad/naar/libburn.so.4");
+        ui.label(t.details.lib_failed_body);
+        ui.label(t.details.lib_failed_install);
+        ui.label(t.details.lib_failed_manual);
+        ui.label(t.details.lib_failed_env);
 
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            ui.label("Pad:");
+            ui.label(t.details.path_label);
             ui.add(
                 egui::TextEdit::singleline(&mut app.custom_so)
                     .hint_text("/usr/lib/x86_64-linux-gnu/libburn.so.4")
                     .desired_width(320.0),
             );
-            if ui.button("Opnieuw laden").clicked() && !app.custom_so.trim().is_empty() {
+            if ui.button(t.details.reload).clicked() && !app.custom_so.trim().is_empty() {
                 let path = app.custom_so.trim().to_string();
                 app.reload_library(Some(path));
             }
@@ -69,13 +66,14 @@ fn lib_failed_card(ui: &mut egui::Ui, app: &mut App, error: &str) {
 }
 
 fn drive_details(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
+    let t = app.lang.texts();
     // Compacte kop: naam + apparaatpad; technische details zijn inklapbaar.
     ui.horizontal(|ui| {
         ui.heading(format!("📀 {}", d.display_name()));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(
                 egui::RichText::new(if d.adr.is_empty() {
-                    "(adres onbekend)".to_string()
+                    t.drives.address_unknown.to_string()
                 } else {
                     d.adr.clone()
                 })
@@ -85,11 +83,12 @@ fn drive_details(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry
         });
     });
 
-    egui::CollapsingHeader::new(egui::RichText::new("⚙ Technische details").small())
+    egui::CollapsingHeader::new(egui::RichText::new(t.details.tech_details).small())
         .default_open(false)
         .show(ui, |ui| {
             ui.weak(format!(
-                "Firmware-revisie: {}",
+                "{}: {}",
+                t.details.firmware_prefix,
                 if d.revision.is_empty() {
                     "—"
                 } else {
@@ -100,7 +99,7 @@ fn drive_details(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry
                 .num_columns(2)
                 .spacing([16.0, 4.0])
                 .show(ui, |ui| {
-                    ui.strong("Buffer");
+                    ui.strong(t.details.buffer);
                     ui.label(if d.buffer_size_kb > 0 {
                         format!("{} KB", d.buffer_size_kb)
                     } else {
@@ -108,31 +107,31 @@ fn drive_details(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry
                     });
                     ui.end_row();
 
-                    ui.strong("TAO-bloktypen");
+                    ui.strong(t.details.tao_blocks);
                     ui.monospace(format!("0x{:04X}", d.tao_block_types as u16));
                     ui.end_row();
 
-                    ui.strong("SAO-bloktypen");
+                    ui.strong(t.details.sao_blocks);
                     ui.monospace(format!("0x{:04X}", d.sao_block_types as u16));
                     ui.end_row();
 
-                    ui.strong("RAW-bloktypen");
+                    ui.strong(t.details.raw_blocks);
                     ui.monospace(format!("0x{:04X}", d.raw_block_types as u16));
                     ui.end_row();
 
-                    ui.strong("Packet-bloktypen");
+                    ui.strong(t.details.packet_blocks);
                     ui.monospace(format!("0x{:04X}", d.packet_block_types as u16));
                     ui.end_row();
                 });
 
             ui.add_space(4.0);
-            ui.label(egui::RichText::new("Mogelijkheden").strong());
+            ui.label(egui::RichText::new(t.details.capabilities).strong());
             // Bitvelden dekken CD/DVD-RAM; BD en DVD+R/DVD+RW/DVD-R DL staan
             // alleen in de profiellijst van de drive.
             let has_profile =
                 |codes: &[i32]| d.supported_profiles.iter().any(|p| codes.contains(p));
             ui.horizontal_wrapped(|ui| {
-                ui.label(egui::RichText::new("lezen:").color(colors::DIM));
+                ui.label(egui::RichText::new(t.details.caps_read).color(colors::DIM));
                 for (name, ok) in [
                     ("CD-R", d.caps.read_cdr),
                     ("CD-RW", d.caps.read_cdrw),
@@ -140,13 +139,13 @@ fn drive_details(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry
                     ("DVD-RAM", d.caps.read_dvdram),
                     ("DVD-ROM", d.caps.read_dvdrom),
                     ("BD-ROM", has_profile(&[0x40])),
-                    ("C2-fouten", d.caps.c2_errors),
+                    (t.details.caps_c2, d.caps.c2_errors),
                 ] {
                     chip(ui, name, ok);
                 }
             });
             ui.horizontal_wrapped(|ui| {
-                ui.label(egui::RichText::new("schrijven:").color(colors::DIM));
+                ui.label(egui::RichText::new(t.details.caps_write).color(colors::DIM));
                 for (name, ok) in [
                     ("CD-R", d.caps.write_cdr),
                     ("CD-RW", d.caps.write_cdrw),
@@ -161,7 +160,7 @@ fn drive_details(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry
                 ] {
                     chip(ui, name, ok);
                 }
-                chip(ui, "simulatie", d.caps.write_simulate);
+                chip(ui, t.details.caps_simulate, d.caps.write_simulate);
             });
         });
 
@@ -172,7 +171,7 @@ fn drive_details(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry
     ui.add_space(8.0);
     ui.group(|ui| {
         ui.horizontal(|ui| {
-            led(ui, app.burn_led);
+            led(ui, app.burn_led, &t.common);
             ui.label(egui::RichText::new("🔥 Branden").strong());
         });
         burn_section(ui, app, d);
@@ -197,17 +196,17 @@ fn chip(ui: &mut egui::Ui, name: &str, ok: bool) {
 
 /// Status-LED: groen = klaar/geslaagd, oranje = bezig, rood = fout,
 /// grijs = inactief.
-fn led(ui: &mut egui::Ui, state: crate::app::JobLed) {
+fn led(ui: &mut egui::Ui, state: crate::app::JobLed, t: &CommonTexts) {
     use crate::app::JobLed;
     let (color, tip) = match state {
-        JobLed::Idle => (colors::DIM, "inactief"),
-        JobLed::Busy => (colors::WARN, "bezig…"),
-        JobLed::Ok => (colors::OK, "klaar — geslaagd"),
-        JobLed::Error => (colors::BAD, "mislukt"),
+        JobLed::Idle => (colors::DIM, t.led_idle),
+        JobLed::Busy => (colors::WARN, t.led_busy),
+        JobLed::Ok => (colors::OK, t.led_ok),
+        JobLed::Error => (colors::BAD, t.led_error),
     };
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(11.0, 11.0), egui::Sense::hover());
     ui.painter().circle_filled(rect.center(), 5.0, color);
-    resp.on_hover_text(format!("Status: {tip}"));
+    resp.on_hover_text(format!("{}: {tip}", t.status_prefix));
 }
 
 /// Formatteert seconden als m:ss of h:mm:ss.
@@ -224,8 +223,9 @@ fn fmt_dur(secs: f64) -> String {
 }
 
 fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
+    let t = app.lang.texts();
     ui.group(|ui| {
-        ui.label(egui::RichText::new("Media").strong());
+        ui.label(egui::RichText::new(t.media.title).strong());
         ui.separator();
 
         let inspecting = app.busy_drive == Some(d.index);
@@ -238,33 +238,41 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
         ui.horizontal(|ui| {
             if inspecting {
                 ui.spinner();
-                ui.label("Station inspecteren (grab → status → snelheden → release)…");
+                ui.label(t.media.inspecting);
             } else {
                 if ui
-                    .add_enabled(scan_ready, egui::Button::new("🔍 Media inspecteren"))
+                    .add_enabled(scan_ready, egui::Button::new(t.media.inspect_btn))
                     .clicked()
                 {
                     app.request_inspect(d.index);
                 }
                 if !scan_ready {
-                    ui.weak("(wacht op de stationscan)");
+                    ui.weak(t.media.waiting_for_scan);
                 }
             }
         });
 
         if let Some(media) = &d.media {
-            let (disc_color, disc_text) = match media.disc_status {
-                DiscStatus::Blank => (colors::OK, "Leeg — klaar om te beschrijven"),
-                DiscStatus::Empty => (colors::DIM, "Geen schijf"),
-                DiscStatus::Appendable => (colors::WARN, "Onvolledig — extra sessie mogelijk"),
-                DiscStatus::Full => (colors::ACCENT, "Vol / afgesloten (alleen lezen)"),
-                DiscStatus::Unsuitable => (colors::BAD, "Onbruikbare media"),
-                _ => (colors::DIM, disc_label(media.disc_status)),
+            let disc_color = match media.disc_status {
+                DiscStatus::Blank => colors::OK,
+                DiscStatus::Empty => colors::DIM,
+                DiscStatus::Appendable => colors::WARN,
+                DiscStatus::Full => colors::ACCENT,
+                DiscStatus::Unsuitable => colors::BAD,
+                _ => colors::DIM,
             };
-            ui.colored_label(disc_color, format!("Media: {disc_text}"));
+            ui.colored_label(
+                disc_color,
+                format!(
+                    "{}: {}",
+                    t.media.media_prefix,
+                    t.media.disc_status_label(media.disc_status)
+                ),
+            );
             ui.weak(format!(
-                "Station: {}",
-                drive_status_label(media.drive_status)
+                "{}: {}",
+                t.media.drive_prefix,
+                t.media.drive_status_label(media.drive_status)
             ));
 
             // Compacte info in twee kolommen (label–waarde-paren naast elkaar).
@@ -277,7 +285,7 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
                 format!(
                     "{} (0x{:02X})",
                     if fallback.is_empty() {
-                        "onbekend"
+                        t.media.unknown
                     } else {
                         fallback
                     },
@@ -312,25 +320,20 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
                 // Lege overbeschrijfbare media (DVD+RW, BD-RE, …): de drive
                 // meldt de geformatteerde capaciteit, al staat er geen data op.
                 Some(b) if media.disc_status == DiscStatus::Blank => {
-                    format!("{} geformatteerd — nog leeg", format_blocks(b))
+                    format!("{} {}", format_blocks(b), t.media.cap_blank_formatted)
                 }
-                Some(b) => format!("{} ({} blokken)", format_blocks(b), b),
+                Some(b) => format!("{} ({} {})", format_blocks(b), b, t.media.cap_blocks_suffix),
                 None => match media.disc_status {
-                    DiscStatus::Empty | DiscStatus::Unready => "geen schijf".to_string(),
-                    DiscStatus::Blank => "nog niets beschreven".to_string(),
-                    DiscStatus::Unsuitable => "onbruikbare media".to_string(),
+                    DiscStatus::Empty | DiscStatus::Unready => t.media.cap_no_disc.to_string(),
+                    DiscStatus::Blank => t.media.cap_nothing_written.to_string(),
+                    DiscStatus::Unsuitable => t.media.cap_unsuitable.to_string(),
                     // Beschreven media zonder leesbare 2048-byte blokken:
                     // typisch CD-audio (wordt nog niet ondersteund).
-                    _ => "geen leesbare data (bijv. CD-audio)".to_string(),
+                    _ => t.media.cap_no_data.to_string(),
                 },
             };
             let dm_val = if matches!(media.profile_no, 0x41..=0x43) {
-                match media.bd_spare {
-                    Some((alloc, free)) => {
-                        format!("actief (vrij {free} van {alloc})")
-                    }
-                    None => "uit".to_string(),
-                }
+                t.media.dm_label(media.bd_spare)
             } else {
                 "—".to_string()
             };
@@ -339,38 +342,31 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
                 .num_columns(4)
                 .spacing([10.0, 3.0])
                 .show(ui, |ui| {
-                    ui.weak("Type:");
+                    ui.weak(t.media.type_label);
                     ui.label(mediatype_val);
-                    ui.weak("Mediacode:");
+                    ui.weak(t.media.media_code);
                     ui.label(mediacode_val);
                     ui.end_row();
 
-                    ui.weak("Herbeschrijfbaar:");
-                    ui.label(if rewritable { "ja" } else { "nee" });
-                    ui.weak("Book type:");
+                    ui.weak(t.media.rewritable);
+                    ui.label(if rewritable { t.media.yes } else { t.media.no });
+                    ui.weak(t.media.book_type);
                     ui.label(book_val);
                     ui.end_row();
 
-                    ui.weak("Leesbaar:");
-                    ui.label(capacity_val).on_hover_text(
-                        "Wat via burn_read_data maximaal leesbaar is van deze schijf. \
-                         Op DVD/BD meldt de drive de volledige geformatteerde \
-                         capaciteit, ook als de schijf nog leeg is; op CD alleen \
-                         het beschreven gebied. Niet-datamedia (bijv. CD-audio) \
-                         is zo niet leesbaar.",
-                    );
-                    ui.weak("Defect mgmt:");
+                    ui.weak(t.media.readable);
+                    ui.label(capacity_val).on_hover_text(t.media.readable_hover);
+                    ui.weak(t.media.defect_mgmt);
                     ui.label(dm_val);
                     ui.end_row();
                 });
 
             ui.add_space(4.0);
-            toc_section(ui, media);
+            toc_section(ui, media, &t.media);
 
             if !media.speeds.is_empty() {
                 egui::CollapsingHeader::new(
-                    egui::RichText::new(format!("Snelheden ({} entrees)", media.speeds.len()))
-                        .small(),
+                    egui::RichText::new(t.media.speeds_header(media.speeds.len())).small(),
                 )
                 .default_open(false)
                 .show(ui, |ui| {
@@ -379,14 +375,14 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
                         .num_columns(5)
                         .spacing([16.0, 3.0])
                         .show(ui, |ui| {
-                            ui.strong("Bron");
-                            ui.strong("Profiel");
-                            ui.strong("Schrijven");
-                            ui.strong("Lezen");
-                            ui.strong("End-LBA");
+                            ui.strong(t.media.col_source);
+                            ui.strong(t.media.col_profile);
+                            ui.strong(t.media.col_write);
+                            ui.strong(t.media.col_read);
+                            ui.strong(t.media.col_end_lba);
                             ui.end_row();
                             for s in &media.speeds {
-                                ui.label(speed_source_label(s.source));
+                                ui.label(t.media.speed_source_label(s.source));
                                 ui.label(if s.profile_name.is_empty() {
                                     "—".to_string()
                                 } else {
@@ -417,20 +413,21 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
             ui.separator();
             maint_section(ui, app, d);
         } else if !inspecting {
-            ui.weak("Nog niet geïnspecteerd — klik op “Media inspecteren”.");
+            ui.weak(t.media.not_inspected);
         }
     });
 }
 
 /// Schijfkopie-sectie: pad + startknop, of voortgang + annuleren tijdens het lezen.
 fn read_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
+    let t = app.lang.texts();
     if let Some(r) = app.active_read.clone() {
         if r.index == d.index {
             ui.add(egui::ProgressBar::new(r.fraction()).show_percentage());
             ui.horizontal(|ui| {
                 ui.label(format!("{} / {} blokken", r.blocks_done, r.total_blocks));
                 ui.label(format!("{:.0} kB/s", r.kbps));
-                if ui.button("📄 Kies…").clicked() {
+                if ui.button(t.common.choose).clicked() {
                     if let Some(p) = rfd::FileDialog::new()
                         .set_file_name("kopie.iso")
                         .save_file()
@@ -438,7 +435,7 @@ fn read_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
                         app.read_path = p.display().to_string();
                     }
                 }
-                if ui.button("⏹ Annuleren").clicked() {
+                if ui.button(t.common.cancel).clicked() {
                     app.cancel_read();
                 }
             });
@@ -454,7 +451,7 @@ fn read_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
                 .hint_text("~/kopie.iso")
                 .desired_width(180.0),
         );
-        if ui.button("📄 Kies…").clicked() {
+        if ui.button(t.common.choose).clicked() {
             if let Some(p) = rfd::FileDialog::new()
                 .set_file_name("kopie.iso")
                 .save_file()
@@ -482,6 +479,7 @@ fn read_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
 /// voortgang met annuleren.
 fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
     use crate::app::BurnSourceKind;
+    let t = app.lang.texts();
 
     if let Some(b) = app
         .active_burns
@@ -511,7 +509,7 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
                 );
                 ui.label(format!("buffer {:.0}%", b.buffer_pct));
                 ui.label(format!("fifo {:.0}%", b.fifo_pct));
-                if ui.button("⏹ Annuleren").clicked() {
+                if ui.button(t.common.cancel).clicked() {
                     app.cancel_burn(d.index);
                 }
             });
@@ -625,7 +623,7 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
                         .hint_text("~/image.iso")
                         .desired_width(180.0),
                 );
-                if ui.button("📄 Kies…").clicked() {
+                if ui.button(t.common.choose).clicked() {
                     if let Some(p) = rfd::FileDialog::new()
                         .add_filter("ISO-images", &["iso", "img"])
                         .add_filter("Alle bestanden", &["*"])
@@ -741,6 +739,7 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
 /// Onderhoud-sectie (stap 6): losse wis-acties plus de herstelpoging (format).
 fn maint_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
     use crate::worker::{profile_is_formattable, profile_is_overwritable, profile_is_rewritable};
+    let t = app.lang.texts();
 
     ui.label(egui::RichText::new("Onderhoud").strong());
 
@@ -757,7 +756,7 @@ fn maint_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry
                 if m.pct > 0.0 {
                     ui.label(format!("{:.0}%", m.pct));
                 }
-                if ui.button("⏹ Annuleren").clicked() {
+                if ui.button(t.common.cancel).clicked() {
                     app.cancel_maint(d.index);
                 }
             });
@@ -870,15 +869,15 @@ fn maint_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry
 }
 
 /// TOC-weergave: per sessie de tracks met type, startadres en grootte.
-fn toc_section(ui: &mut egui::Ui, media: &crate::worker::MediaInfo) {
+fn toc_section(ui: &mut egui::Ui, media: &crate::worker::MediaInfo, t: &MediaTexts) {
     if media.sessions.is_empty() {
         match media.disc_status {
             DiscStatus::Empty => {}
             DiscStatus::Blank => {
-                ui.weak("Lege media — nog geen TOC.");
+                ui.weak(t.toc_blank);
             }
             _ => {
-                ui.weak("Geen TOC beschikbaar voor deze media.");
+                ui.weak(t.toc_none);
             }
         }
         return;
@@ -887,11 +886,7 @@ fn toc_section(ui: &mut egui::Ui, media: &crate::worker::MediaInfo) {
     // Inklapbaar: bij multi-session discs groeit de tabel met elke sessie;
     // de kop toont het aantal sessies/tracks zodat het eiland compact blijft.
     let total_tracks: usize = media.sessions.iter().map(|s| s.tracks.len()).sum();
-    let header = format!(
-        "Inhoud (TOC) — {} sessie(s), {} track(s)",
-        media.sessions.len(),
-        total_tracks
-    );
+    let header = t.toc_header(media.sessions.len(), total_tracks);
     egui::CollapsingHeader::new(egui::RichText::new(header).small())
         .default_open(media.sessions.len() <= 3)
         .show(ui, |ui| {
@@ -900,37 +895,37 @@ fn toc_section(ui: &mut egui::Ui, media: &crate::worker::MediaInfo) {
                 .num_columns(6)
                 .spacing([16.0, 3.0])
                 .show(ui, |ui| {
-                    ui.strong("Sessie");
-                    ui.strong("Track");
-                    ui.strong("Type");
-                    ui.strong("Start-LBA");
-                    ui.strong("Blokken");
-                    ui.strong("≈ Grootte");
+                    ui.strong(t.col_session);
+                    ui.strong(t.col_track);
+                    ui.strong(t.col_type);
+                    ui.strong(t.col_start_lba);
+                    ui.strong(t.col_blocks);
+                    ui.strong(t.col_size);
                     ui.end_row();
 
                     for s in &media.sessions {
-                        for t in &s.tracks {
-                            ui.label(t.session.to_string());
-                            ui.label(t.track_no.to_string());
-                            ui.label(if t.is_data {
-                                if t.copy_permitted {
-                                    "data · kopie ok"
+                        for track in &s.tracks {
+                            ui.label(track.session.to_string());
+                            ui.label(track.track_no.to_string());
+                            ui.label(if track.is_data {
+                                if track.copy_permitted {
+                                    t.toc_data_copy
                                 } else {
-                                    "data"
+                                    t.toc_data
                                 }
-                            } else if t.copy_permitted {
-                                "audio · kopie ok"
+                            } else if track.copy_permitted {
+                                t.toc_audio_copy
                             } else {
-                                "audio"
+                                t.toc_audio
                             });
-                            ui.monospace(t.start_lba.to_string());
-                            ui.label(if t.blocks > 0 {
-                                t.blocks.to_string()
+                            ui.monospace(track.start_lba.to_string());
+                            ui.label(if track.blocks > 0 {
+                                track.blocks.to_string()
                             } else {
                                 "—".to_string()
                             });
-                            ui.label(if t.blocks > 0 {
-                                format_blocks(t.blocks)
+                            ui.label(if track.blocks > 0 {
+                                format_blocks(track.blocks)
                             } else {
                                 "—".to_string()
                             });
@@ -938,7 +933,8 @@ fn toc_section(ui: &mut egui::Ui, media: &crate::worker::MediaInfo) {
                         }
                         ui.label(
                             egui::RichText::new(format!(
-                                "sessie {} — LBA {} … {}",
+                                "{} {} — LBA {} … {}",
+                                t.toc_session_word,
                                 s.index + 1,
                                 s.start_lba,
                                 s.end_lba.saturating_sub(1)
@@ -953,8 +949,8 @@ fn toc_section(ui: &mut egui::Ui, media: &crate::worker::MediaInfo) {
             if media.incomplete_sessions > 0 {
                 ui.label(
                     egui::RichText::new(format!(
-                        "⚠ {} onvolledige sessie(s) aanwezig",
-                        media.incomplete_sessions
+                        "⚠ {} {}",
+                        media.incomplete_sessions, t.toc_incomplete
                     ))
                     .small()
                     .color(colors::WARN),
