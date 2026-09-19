@@ -91,6 +91,7 @@ cargo build --release
 | `src/app.rs` | application state, event handling, panel layout |
 | `src/ffi.rs` | raw FFI: `#[repr(C)]` types from `libburn.h` + dynamic loading via `libloading` |
 | `src/isofs.rs` | raw FFI for libisofs (`libisofs.so.6`): composing an ISO9660 image as a burn source |
+| `src/raii.rs` | RAII ownership wrappers around the libburn/libisofs handles (Drop frees) |
 | `src/worker.rs` | background worker that runs all libburn calls on one thread |
 | `src/logger.rs` | feedback log with levels and timestamps |
 | `src/settings.rs` | user settings (passed to libburn in the burn step) |
@@ -214,12 +215,33 @@ cargo build --release
   timestamps, eject), quickstart guide (`QUICKSTART.md`), README fully in
   en-US, `rust-version` pinned, clippy-clean, and the license
   (GPL-3.0-or-later, see `LICENSE`).
-- [ ] **Step 10c — Next thread**: the .deb package (Depends: libburn4,
-  libisofs6 — libisoburn1 not needed; check the t64 suffix on Debian
-  trixie; the .desktop file must be named exactly `burnr.desktop` to match
-  the Wayland app id) and the RAII hardening pass: RAII wrappers around the
-  libburn FFI handles (grab/release, disc/session/track/source),
-  de-duplication of the two burn flows and a shutdown-during-job test.
+- [ ] **Step 10c — Next thread**: the RAII hardening pass is done (this
+  thread); the .deb package is next (Depends: libburn4, libisofs6 —
+  libisoburn1 not needed; check the t64 suffix on Debian trixie; the
+  .desktop file must be named exactly `burnr.desktop` to match the Wayland
+  app id).
+  - **RAII hardening (done)**: new `src/raii.rs` with ownership wrappers
+    around every libburn/libisofs handle — `GrabbedDrive` (grab/release/
+    regrab/eject), `OwnedDisc/Session/Track/Source/WriteOpts`, `SpeedList`,
+    composed `BurnModel`, and for libisofs `IsoImageRef`/`IsoWriteOptsRef`/
+    `IsoDataSourceRef`/`IsoParts`. Every wrapper frees its handle in `Drop`,
+    so early returns and panics can no longer leak (the old error ladders had
+    real leaks, e.g. in the model-build error paths and the multi-session
+    import). `WorkerState` got a `Drop` (drive list → burn_finish →
+    iso_finish), the two burn flows share one tail (`start_write_job`:
+    space check, model, write opts, start), and `grab_and_check_media`/
+    `make_write_opts` hand out RAII types. i18n messages that became unused
+    were removed.
+  - **Shutdown-during-job tests (done)**: `worker_shutdown_during_scan`
+    (Shutdown mid-scan → WorkerStopped + clean thread exit) and
+    `shutdown_during_stdio_burn` (a real async burn job on a `stdio:`
+    pseudo-drive via the new `burn_drive_scan_and_grab` FFI, cancelled
+    mid-flight like `Command::Shutdown` does, then polled to IDLE and torn
+    down via RAII). The scan test exposed a real pre-existing crash:
+    aborting a scan left libburn's detached scan thread running, and
+    `burn_finish()`/`dlclose` under it segfaulted. The scan abort path now
+    drains the scan protocol until the thread reports done, frees the
+    result array and settles briefly before shutdown.
 
 ## Tests
 

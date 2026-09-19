@@ -261,6 +261,12 @@ pub struct RawLibburn {
     pub finish: unsafe extern "C" fn(),
     pub version: unsafe extern "C" fn(*mut c_int, *mut c_int, *mut c_int),
     pub drive_scan: unsafe extern "C" fn(*mut *mut DriveInfo, *mut c_uint) -> c_int,
+    /// `burn_drive_scan_and_grab`: bundelt whitelist + scan + grab voor een
+    /// bekend adres (incl. `stdio:`-pseudodrives). Gebruikt door de
+    /// shutdown-tijdens-job test; geeft 1 = succes, 0 = niet gevonden,
+    /// -1 = andere fout.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub drive_scan_and_grab: unsafe extern "C" fn(*mut *mut DriveInfo, *mut c_char, c_int) -> c_int,
     pub drive_info_free: unsafe extern "C" fn(*mut DriveInfo),
     pub drive_get_adr: unsafe extern "C" fn(*mut DriveInfo, *mut c_char) -> c_int,
     pub drive_get_all_profiles:
@@ -409,6 +415,11 @@ impl RawLibburn {
                 lib,
                 "burn_drive_scan",
                 unsafe extern "C" fn(*mut *mut DriveInfo, *mut c_uint) -> c_int
+            );
+            let drive_scan_and_grab = resolve!(
+                lib,
+                "burn_drive_scan_and_grab",
+                unsafe extern "C" fn(*mut *mut DriveInfo, *mut c_char, c_int) -> c_int
             );
             let drive_info_free = resolve!(
                 lib,
@@ -769,6 +780,7 @@ impl RawLibburn {
                 finish,
                 version,
                 drive_scan,
+                drive_scan_and_grab,
                 drive_info_free,
                 drive_get_adr,
                 drive_get_all_profiles,

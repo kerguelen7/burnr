@@ -9,6 +9,7 @@ mod ffi;
 mod i18n;
 mod isofs;
 mod logger;
+mod raii;
 mod settings;
 mod ui;
 mod worker;

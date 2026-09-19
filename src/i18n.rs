@@ -2200,24 +2200,6 @@ impl Lang {
         }
     }
 
-    pub fn w_model_failed(self) -> String {
-        match self {
-            Lang::EnUs => "Cannot build the libburn model".to_string(),
-            Lang::NlNl => "Kan het libburn-model niet opbouwen".to_string(),
-            Lang::DeDe => "Das libburn-Modell konnte nicht aufgebaut werden".to_string(),
-        }
-    }
-
-    pub fn w_attach_failed(self) -> String {
-        match self {
-            Lang::EnUs => "Cannot attach the libisofs source to the track".to_string(),
-            Lang::NlNl => "Kan de libisofs-bron niet aan de track koppelen".to_string(),
-            Lang::DeDe => {
-                "Die libisofs-Quelle konnte nicht an den Track gekoppelt werden".to_string()
-            }
-        }
-    }
-
     // ── Grab / media-check / schrijfmodus ──
 
     pub fn w_media_not_writable(self, status: DiscStatus) -> String {

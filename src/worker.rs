@@ -14,11 +14,15 @@ use std::time::Duration;
 use crate::ffi;
 use crate::ffi::{
     BURN_DRIVE_ADR_LEN, BURN_MSGS_MESSAGE_LEN, DiscStatus, DriveInfo, DriveStatus, Progress,
-    RawLibburn, SpeedDescriptor, cbuf_to_string,
+    RawLibburn, cbuf_to_string,
 };
 use crate::i18n::Lang;
 use crate::isofs::{ISO_MSGS_MESSAGE_LEN, ISO_SUCCESS, RawLibisofs};
 use crate::logger::Level;
+use crate::raii::{
+    BurnModel, GrabbedDrive, IsoDataSourceRef, IsoImageRef, IsoParts, IsoWriteOptsRef, OwnedDisc,
+    OwnedSession, OwnedSource, OwnedTrack, OwnedWriteOpts, SpeedList,
+};
 use crate::settings::BurnSettings;
 
 /// 1× CD-snelheid ≈ 176,4 kB/s (75 sectoren × 2352 bytes).
@@ -355,8 +359,32 @@ struct WorkerState {
     n_drives: usize,
     /// Interfacetaal voor de logregels van de worker (stap 10b-6 gebruikt
     /// dit; hier wordt alleen de taal bijgehouden).
-    #[allow(dead_code)]
     lang: Lang,
+}
+
+impl WorkerState {
+    /// Geeft de drive-info-array vrij vóór een nieuwe scan (volgens libburn.h
+    /// verplicht: alle pointers worden ongeldig).
+    fn free_drive_list(&mut self) {
+        if !self.infos.is_null() {
+            unsafe { (self.raw.drive_info_free)(self.infos) };
+            self.infos = std::ptr::null_mut();
+            self.n_drives = 0;
+        }
+    }
+}
+
+/// Nette afsluiting bij het einde van de worker of bij herladen van de
+/// library: drive-lijst vrijgeven zolang libburn leeft, daarna beide
+/// libraries afsluiten — in precies die volgorde.
+impl Drop for WorkerState {
+    fn drop(&mut self) {
+        self.free_drive_list();
+        unsafe { (self.raw.finish)() };
+        if let Some(iso) = &self.isofs {
+            unsafe { (iso.finish)() };
+        }
+    }
 }
 
 /// Soort actieve job.
@@ -368,27 +396,28 @@ enum JobKind {
 }
 
 /// libburn/libisofs-resources van een write-job die pas na afloop
-/// vrijgegeven worden.
+/// vrijgegeven worden — allemaal RAII (stap 10c): de Drop-impls geven de
+/// handles vrij, ook bij vroege returns of panics. De velden bestaan primair
+/// voor hun RAII-Drop; alleen `source` wordt tijdens de job uitgelezen (voor
+/// de FIFO-vulling).
+#[allow(dead_code)]
 struct WriteRes {
-    opts: *mut ffi::BurnWriteOpts,
-    disc: *mut ffi::BurnDisc,
-    session: *mut ffi::BurnSession,
-    track: *mut ffi::BurnTrack,
-    source: *mut ffi::BurnSource,
-    /// libisofs data-bron bij multi-session import (blijft alive tot na de
-    /// brand: oude bestandsdata wordt tijdens het schrijven gelezen).
-    data_src: *mut crate::isofs::IsoDataSource,
-    iso_opts: *mut crate::isofs::IsoWriteOpts,
-    image: *mut crate::isofs::IsoImage,
+    model: BurnModel,
+    opts: OwnedWriteOpts,
+    /// De FIFO-bron; wordt tijdens de job gelezen voor de voortgang.
+    source: OwnedSource,
+    /// libisofs-delen bij “bestanden samenstellen” (None bij ISO-branden).
+    iso: Option<IsoParts>,
 }
 
 /// Actieve job die niet-blokkerend wordt gepolld (stap 9b: meerdere stations
 /// tegelijk). libburn draait brandjobs in eigen threads; onze poll leest
-/// alleen de status voor voortgang en afronding.
+/// alleen de status voor voortgang en afronding. De gegrabde drive is RAII:
+/// bij een paniek of een vergeten release geeft Drop de drive vrij.
 struct ActiveJob {
     index: usize,
     adr: String,
-    drive: *mut ffi::BurnDrive,
+    drive: GrabbedDrive,
     kind: JobKind,
     write: Option<WriteJob>,
     started: std::time::Instant,
@@ -499,7 +528,7 @@ fn run(cmds: Receiver<Command>, events: Sender<Event>, ctx: egui::Context) {
                 Command::CancelBurn { index } => {
                     if let Some(st) = state.as_ref() {
                         if let Some(job) = active.iter_mut().find(|j| j.index == index) {
-                            unsafe { (st.raw.drive_cancel)(job.drive) };
+                            unsafe { (st.raw.drive_cancel)(job.drive.handle()) };
                             job.cancelled = true;
                             notify.log(Level::Info, lang.w_cancel_requested(index));
                         } else {
@@ -517,7 +546,7 @@ fn run(cmds: Receiver<Command>, events: Sender<Event>, ctx: egui::Context) {
                     shutdown = true;
                     if let Some(st) = state.as_ref() {
                         for job in &mut active {
-                            unsafe { (st.raw.drive_cancel)(job.drive) };
+                            unsafe { (st.raw.drive_cancel)(job.drive.handle()) };
                             job.cancelled = true;
                         }
                     }
@@ -645,7 +674,7 @@ fn scan(
 
     // Volgens libburn.h verplicht: de oude drive-info-array vrijgeven vóór een
     // nieuwe scan (alle pointers worden ongeldig).
-    free_drive_list(st);
+    st.free_drive_list();
 
     notify.log(Level::Info, lang.w_scanning());
     notify.send(Event::ScanStarted);
@@ -677,7 +706,31 @@ fn scan(
     };
 
     match outcome {
-        Outcome::Aborted => return,
+        Outcome::Aborted => {
+            // De scan draait in een eigen libburn-thread (async.c:
+            // Burnworker_type_scaN, detached). Die móét eerst klaar zijn:
+            // burn_finish()/dlclose onder een nog lopende scan-thread crasht
+            // (blootgelegd door de shutdown-tijdens-job test). Daarom het
+            // scan-protocol gewoon voortzetten tot de thread done meldt, en
+            // dan het (lege of gevulde) resultaat vrijgeven. Restcommando's
+            // worden genegeerd — de worker is toch aan het afsluiten.
+            loop {
+                let ret = unsafe { (st.raw.drive_scan)(&mut infos, &mut n) };
+                if ret != 0 {
+                    break;
+                }
+                let _ = cmds.try_recv();
+                thread::sleep(Duration::from_millis(40));
+            }
+            // Korte settle: de detached scan-thread meldt done vlak vóór haar
+            // eigen einde; geef haar de tijd om geheel te eindigen vóór
+            // burn_finish()/dlclose.
+            thread::sleep(Duration::from_millis(100));
+            if !infos.is_null() {
+                unsafe { (st.raw.drive_info_free)(infos) };
+            }
+            return;
+        }
         Outcome::Done(ret) if ret < 0 => {
             let msg = lang.w_scan_failed(ret);
             notify.log(Level::Error, msg.clone());
@@ -795,21 +848,22 @@ fn inspect(state: Option<&WorkerState>, lang: Lang, index: usize, notify: &Notif
     .to_string();
     notify.log(Level::Info, lang.w_inspect_grab(index, &name));
 
-    let grabbed = unsafe { (st.raw.drive_grab)(di.drive, 0) } == 1;
-    if !grabbed {
+    // RAII: de drive blijft gegrabbed tot het einde van de inspectie en wordt
+    // dan (of bij een tussentijdse return/paniek) automatisch vrijgegeven.
+    let Some(mut drive) = GrabbedDrive::grab(&st.raw, di.drive) else {
         let adr = unsafe { adr_of(&di, &st.raw) };
         let msg = lang.w_grab_failed(index, &adr);
         notify.log(Level::Error, msg.clone());
         notify.send(Event::InspectFailed { index, error: msg });
         return;
-    }
+    };
     notify.log(Level::Info, lang.w_inspect_grabbed(index));
 
     // burn_disc_get_status geeft UNREADY terug zolang de drive nog bezig is;
     // een paar keer pollen met korte pauzes (max. ~2 s).
     let mut disc = DiscStatus::Unready;
     for _ in 0..40 {
-        disc = DiscStatus::from_raw(unsafe { (st.raw.disc_get_status)(di.drive) });
+        disc = DiscStatus::from_raw(unsafe { (st.raw.disc_get_status)(drive.handle()) });
         if disc != DiscStatus::Unready {
             break;
         }
@@ -820,8 +874,9 @@ fn inspect(state: Option<&WorkerState>, lang: Lang, index: usize, notify: &Notif
     // Stap 2: profiel (mediatype) opvragen.
     let mut profile_no: c_int = 0;
     let mut profile_buf = [0 as c_char; 80];
-    let profile_ok =
-        unsafe { (st.raw.disc_get_profile)(di.drive, &mut profile_no, profile_buf.as_mut_ptr()) };
+    let profile_ok = unsafe {
+        (st.raw.disc_get_profile)(drive.handle(), &mut profile_no, profile_buf.as_mut_ptr())
+    };
     let profile_name = if profile_ok == 1 {
         let name = cbuf_to_string(&profile_buf);
         if name.is_empty() {
@@ -843,12 +898,14 @@ fn inspect(state: Option<&WorkerState>, lang: Lang, index: usize, notify: &Notif
     // Let op: libburn meldt na een mislukte READ CAPACITY nog "1 blok"
     // als succes (quirk in burn_get_read_capacity_v2); daarom > 1.
     let mut capacity: c_int = 0;
-    let read_capacity =
-        if unsafe { (st.raw.get_read_capacity)(di.drive, &mut capacity, 0) } == 1 && capacity > 1 {
-            Some(capacity)
-        } else {
-            None
-        };
+    let read_capacity = if unsafe { (st.raw.get_read_capacity)(drive.handle(), &mut capacity, 0) }
+        == 1
+        && capacity > 1
+    {
+        Some(capacity)
+    } else {
+        None
+    };
     if let Some(blocks) = read_capacity {
         notify.log(
             Level::Info,
@@ -856,7 +913,7 @@ fn inspect(state: Option<&WorkerState>, lang: Lang, index: usize, notify: &Notif
         );
     }
 
-    let erasable = unsafe { (st.raw.disc_erasable)(di.drive) } != 0;
+    let erasable = unsafe { (st.raw.disc_erasable)(drive.handle()) } != 0;
 
     // Stap 8: mediacode (ADIP/ATIP) en BD spare-info (defect management).
     let mut media_id: Option<MediaId> = None;
@@ -867,8 +924,14 @@ fn inspect(state: Option<&WorkerState>, lang: Lang, index: usize, notify: &Notif
             let mut m1: *mut c_char = std::ptr::null_mut();
             let mut m2: *mut c_char = std::ptr::null_mut();
             let mut bt: *mut c_char = std::ptr::null_mut();
-            let r =
-                (st.raw.disc_get_media_id)(di.drive, &mut product, &mut m1, &mut m2, &mut bt, 0);
+            let r = (st.raw.disc_get_media_id)(
+                drive.handle(),
+                &mut product,
+                &mut m1,
+                &mut m2,
+                &mut bt,
+                0,
+            );
             if r == 1 {
                 let product_id = ffi::take_cstring(product);
                 let code1 = ffi::take_cstring(m1);
@@ -925,7 +988,7 @@ fn inspect(state: Option<&WorkerState>, lang: Lang, index: usize, notify: &Notif
             // Defect management-status bij BD-media (spare-gebieden).
             if matches!(profile_no, 0x41..=0x43) {
                 let (mut alloc, mut free_b): (c_int, c_int) = (0, 0);
-                let r = (st.raw.disc_get_bd_spare_info)(di.drive, &mut alloc, &mut free_b, 0);
+                let r = (st.raw.disc_get_bd_spare_info)(drive.handle(), &mut alloc, &mut free_b, 0);
                 if r == 1 && alloc > 0 {
                     bd_spare = Some((alloc, free_b));
                     notify.log(Level::Info, lang.w_inspect_dm_active(index, free_b, alloc));
@@ -938,7 +1001,7 @@ fn inspect(state: Option<&WorkerState>, lang: Lang, index: usize, notify: &Notif
 
     // Stap 2: TOC-model van de schijf opbouwen (alleen zinvol bij media met
     // inhoud; bij lege media geeft de drive NULL of een leeg model).
-    let (sessions, incomplete) = unsafe { read_toc(&st.raw, di.drive) };
+    let (sessions, incomplete) = unsafe { read_toc(&st.raw, drive.handle()) };
     if !sessions.is_empty() {
         let total_tracks: usize = sessions.iter().map(|s| s.tracks.len()).sum();
         notify.log(
@@ -948,12 +1011,10 @@ fn inspect(state: Option<&WorkerState>, lang: Lang, index: usize, notify: &Notif
     }
 
     // Snelheden: burn_drive_get_speedlist geeft een kopie van de lijst terug,
-    // die we via .next doorlopen en daarna vrijgeven.
+    // die we via .next doorlopen; de RAII-wrapper geeft de kopie daarna vrij.
     let mut speeds = Vec::new();
-    let mut list: *mut SpeedDescriptor = std::ptr::null_mut();
-    let r = unsafe { (st.raw.drive_get_speedlist)(di.drive, &mut list) };
-    if r > 0 && !list.is_null() {
-        let mut p = list;
+    if let Some(list) = SpeedList::get(&st.raw, drive.handle()) {
+        let mut p = list.head();
         while !p.is_null() {
             let d = unsafe { *p };
             speeds.push(SpeedEntry {
@@ -966,15 +1027,14 @@ fn inspect(state: Option<&WorkerState>, lang: Lang, index: usize, notify: &Notif
             });
             p = d.next;
         }
-        unsafe { (st.raw.drive_free_speedlist)(&mut list) };
         notify.log(Level::Info, lang.w_inspect_speeds(index, speeds.len()));
     }
 
     let mut prog = Progress::default();
     let drive_status =
-        DriveStatus::from_raw(unsafe { (st.raw.drive_get_status)(di.drive, &mut prog) });
+        DriveStatus::from_raw(unsafe { (st.raw.drive_get_status)(drive.handle(), &mut prog) });
 
-    unsafe { (st.raw.drive_release)(di.drive, 0) };
+    drive.release_now(0);
     notify.log(Level::Success, lang.w_inspect_done(index));
     notify.send(Event::InspectDone {
         index,
@@ -1008,10 +1068,12 @@ unsafe fn read_toc(raw: &RawLibburn, drive: *mut ffi::BurnDrive) -> (Vec<TocSess
     // Edition 2024: de body van een `unsafe fn` is zelf safe; elke onveilige
     // operatie staat hier expliciet in één `unsafe`-blok.
     unsafe {
-        let disc = (raw.drive_get_disc)(drive);
-        if disc.is_null() {
+        // RAII: burn_drive_get_disc geeft een compleet disc-model terug; de
+        // wrapper geeft het (incl. sessies/tracks) vrij zodra we klaar zijn.
+        let Some(disc) = OwnedDisc::new(raw, (raw.drive_get_disc)(drive)) else {
             return (Vec::new(), 0);
-        }
+        };
+        let disc = disc.handle();
 
         let mut sessions_out: Vec<TocSession> = Vec::new();
         let mut num_sessions: c_int = 0;
@@ -1067,8 +1129,8 @@ unsafe fn read_toc(raw: &RawLibburn, drive: *mut ffi::BurnDrive) -> (Vec<TocSess
             }
         }
 
-        (raw.disc_free)(disc);
         (sessions_out, incomplete)
+        // disc dropt hier: burn_disc_free geeft ook de sessies/tracks vrij.
     }
 }
 
@@ -1110,20 +1172,123 @@ fn sev_to_level(sev: &str) -> Level {
     }
 }
 
-fn free_drive_list(st: &mut WorkerState) {
-    if !st.infos.is_null() {
-        unsafe { (st.raw.drive_info_free)(st.infos) };
-        st.infos = std::ptr::null_mut();
-        st.n_drives = 0;
+/// Alles wat de gedeelde staart van de brandflows nodig heeft (stap 10c):
+/// de gegrabde drive, de databron (FIFO), de optionele libisofs-delen en de
+/// payloadgrootte in bytes. Alles RAII — bij een fout na dit punt ruimt de
+/// compiler alles zelf op.
+struct WriteSetup {
+    drive: GrabbedDrive,
+    source: OwnedSource,
+    iso: Option<IsoParts>,
+    size_bytes: i64,
+}
+
+/// Gedeelde staart van `burn_job` en `burn_files_job`: ruimtecheck, disc-model
+/// (disc → session → track met de bron), write-opts volgens de instellingen,
+/// start van de brand en registratie als ActiveJob. Bij een fout komt er één
+/// BurnFailed-event en wordt alles via RAII opgeruimd.
+#[allow(clippy::too_many_arguments)]
+fn start_write_job(
+    st: &WorkerState,
+    di: &DriveInfo,
+    index: usize,
+    s: &BurnSettings,
+    setup: WriteSetup,
+    lang: Lang,
+    active: &mut Vec<ActiveJob>,
+    notify: &Notifier,
+) {
+    let WriteSetup {
+        drive,
+        source,
+        iso,
+        size_bytes,
+    } = setup;
+    let expected_sectors = ((size_bytes + 2047) / 2048) as i32;
+
+    // Ruimtecheck (indicatief; de echte precheck doet libburn zelf).
+    let avail = unsafe { (st.raw.disc_available_space)(drive.handle(), std::ptr::null_mut()) };
+    if avail >= 0 && (avail as i64) < size_bytes {
+        let msg = if iso.is_some() {
+            lang.w_image_size_warning(
+                &format_blocks(expected_sectors),
+                &format_blocks(avail as i32),
+            )
+        } else {
+            lang.w_iso_size_warning(
+                &format_blocks(expected_sectors),
+                &format_blocks(avail as i32),
+            )
+        };
+        notify.log(Level::Warning, msg);
     }
+
+    // Disc-model: disc → session → track met de bron.
+    let model = match unsafe {
+        build_model_with_source(&st.raw, &source, size_bytes, s.padding_kib, lang, notify)
+    } {
+        Ok(m) => m,
+        Err(msg) => {
+            notify.send(Event::BurnFailed { index, error: msg });
+            return;
+        }
+    };
+
+    // Write-opts + schrijfmodus (gedeelde helper).
+    let opts = match unsafe {
+        make_write_opts(
+            &st.raw,
+            drive.handle(),
+            model.disc.handle(),
+            s,
+            lang,
+            notify,
+        )
+    } {
+        Ok(o) => o,
+        Err(msg) => {
+            notify.send(Event::BurnFailed { index, error: msg });
+            return;
+        }
+    };
+
+    // Branden starten (asynchroon — libburn draait de job in eigen threads);
+    // de job wordt aan de actieve lijst toegevoegd en door de hoofdlus gepolld.
+    unsafe { (st.raw.disc_write)(opts.handle(), model.disc.handle()) };
+    notify.send(Event::BurnStarted {
+        index,
+        total_sectors: expected_sectors,
+        simulate: s.simulate,
+    });
+    notify.log(Level::Info, lang.w_burn_started(index, s.simulate));
+    active.push(ActiveJob {
+        index,
+        adr: unsafe { adr_of(di, &st.raw) },
+        drive,
+        kind: JobKind::Write {
+            simulate: s.simulate,
+        },
+        write: Some(WriteJob {
+            s: s.clone(),
+            res: WriteRes {
+                model,
+                opts,
+                source,
+                iso,
+            },
+        }),
+        started: std::time::Instant::now(),
+        last_progress: std::time::Instant::now(),
+        last_pct: Some(i32::MIN),
+        last_sector: 0,
+        cancelled: false,
+    });
 }
 
 /// Brandt een ISO-bestand naar het station.
 ///
-/// Flow: grab → media check → (evt. wissen) → disc-model (session/track) met
-/// file-bron + 4 MiB FIFO → write-opts (snelheid, type, simulatie, multi) →
-/// burn_disc_write → poll status/voortgang → resultaat. Annuleren kan via
-/// burn_drive_cancel.
+/// Flow: validatie → grab + media check (RAII) → snelheid → bron (bestand →
+/// FIFO) → gedeelde staart `start_write_job` (model, write-opts, brand).
 fn burn_job(
     state: &Option<WorkerState>,
     lang: Lang,
@@ -1187,96 +1352,57 @@ fn burn_job(
         lang.w_settings_line(s.simulate, s.multi_session, s.padding_kib, s.overburn, None),
     );
 
-    // Grab + media-check (gedeelde flow).
-    if grab_and_check_media(st, &di, index, notify).is_err() {
-        return;
-    }
-
-    // Ruimtecheck (indicatief; de echte precheck doet libburn zelf).
-    let avail = unsafe { (st.raw.disc_available_space)(di.drive, std::ptr::null_mut()) };
-    if avail >= 0 && (avail as i64) < file_size as i64 {
-        notify.log(
-            Level::Warning,
-            lang.w_iso_size_warning(
-                &format_blocks(((file_size as i64 + 2047) / 2048) as i32),
-                &format_blocks(avail as i32),
-            ),
-        );
-    }
+    // Grab + media-check (gedeelde flow). De drive blijft gegrabbed (RAII)
+    // tot het einde van de job; vroege returns geven hem automatisch vrij.
+    let drive = match grab_and_check_media(st, &di, index, notify) {
+        Ok(d) => d,
+        Err(()) => return,
+    };
 
     // Snelheid: maximaal (0) of een door de user gekozen maximum (kB/s).
-    // libburn brandt nooit sneller dan dit maximum en ook nooit sneller dan
-    // media/drive toelaten.
-    let write_speed = if s.speed_max { 0 } else { s.speed_kbps };
-    unsafe { (st.raw.drive_set_speed)(di.drive, 0, write_speed) };
-    notify.log(Level::Info, lang.w_speed(s.speed_max, s.speed_kbps));
+    unsafe { set_write_speed(st, drive.handle(), s, notify) };
 
-    // Disc-model: disc → session → track met file-bron + FIFO.
+    // Bron: bestand → FIFO (4 MiB) → track.
     let path_c = match std::ffi::CString::new(path) {
         Ok(c) => c,
         Err(_) => {
             let msg = lang.w_bad_path_nul();
             notify.log(Level::Error, &msg);
-            unsafe { (st.raw.drive_release)(di.drive, 0) };
             notify.send(Event::BurnFailed { index, error: msg });
             return;
         }
     };
-    let (disc, session, track, fifo, opts) = match unsafe {
-        build_burn_model(
-            &st.raw,
-            di.drive,
-            path_c.as_ptr(),
-            file_size,
-            s,
-            st.lang,
-            notify,
-        )
-    } {
-        Ok(model) => model,
-        Err(msg) => {
-            unsafe { (st.raw.drive_release)(di.drive, 0) };
+    let file_source = match OwnedSource::new(&st.raw, unsafe {
+        (st.raw.file_source_new)(path_c.as_ptr(), std::ptr::null())
+    }) {
+        Some(f) => f,
+        None => {
+            let msg = lang.w_file_source_failed();
+            notify.log(Level::Error, &msg);
             notify.send(Event::BurnFailed { index, error: msg });
             return;
         }
     };
+    let source = match OwnedSource::new(&st.raw, unsafe {
+        (st.raw.fifo_source_new)(file_source.handle(), 2048, BURN_FIFO_CHUNKS, 0)
+    }) {
+        Some(f) => f,
+        None => {
+            let msg = lang.w_fifo_source_failed();
+            notify.log(Level::Error, &msg);
+            notify.send(Event::BurnFailed { index, error: msg });
+            return; // file_source + drive droppen automatisch
+        }
+    };
+    drop(file_source); // fifo heeft een eigen referentie in libburn
 
-    // Branden starten (asynchroon — libburn draait de job in eigen threads);
-    // de job wordt aan de actieve lijst toegevoegd en door de hoofdlus gepolld.
-    unsafe { (st.raw.disc_write)(opts, disc) };
-    notify.send(Event::BurnStarted {
-        index,
-        total_sectors: expected_sectors,
-        simulate: s.simulate,
-    });
-    notify.log(Level::Info, lang.w_burn_started(index, s.simulate));
-    let adr = unsafe { adr_of(&di, &st.raw) };
-    active.push(ActiveJob {
-        index,
-        adr,
-        drive: di.drive,
-        kind: JobKind::Write {
-            simulate: s.simulate,
-        },
-        write: Some(WriteJob {
-            s: s.clone(),
-            res: WriteRes {
-                opts,
-                disc,
-                session,
-                track,
-                source: fifo,
-                data_src: std::ptr::null_mut(),
-                iso_opts: std::ptr::null_mut(),
-                image: std::ptr::null_mut(),
-            },
-        }),
-        started: std::time::Instant::now(),
-        last_progress: std::time::Instant::now(),
-        last_pct: Some(i32::MIN),
-        last_sector: 0,
-        cancelled: false,
-    });
+    let setup = WriteSetup {
+        drive,
+        source,
+        iso: None,
+        size_bytes: file_size as i64,
+    };
+    start_write_job(st, &di, index, s, setup, lang, active, notify);
 }
 
 /// Stelt een data-image samen uit bestanden/mappen (libisofs) en brandt die
@@ -1369,13 +1495,13 @@ fn burn_files_job(
             notify.send(Event::BurnFailed { index, error: msg });
             return;
         }
-        image
+        IsoImageRef::new(iso, image).expect("net op niet-null gecontroleerd")
     };
 
     // Bestaande sessie importeren (multi-session op schrijf-eenmalige media).
     // De data-bron blijft bewust alive tot na de brand: oude bestandsdata
-    // wordt tijdens het branden van de schijf gelezen.
-    let mut data_src: *mut crate::isofs::IsoDataSource = std::ptr::null_mut();
+    // wordt tijdens het branden van de schijf gelezen (IsoParts.data_src).
+    let mut data_src: Option<IsoDataSourceRef> = None;
     if let Some(start_block) = import_start_block {
         notify.log(Level::Info, lang.w_import_start(start_block));
         let dev_c = match std::ffi::CString::new(adr.as_str()) {
@@ -1383,9 +1509,8 @@ fn burn_files_job(
             Err(_) => {
                 let msg = lang.w_bad_dev_nul();
                 notify.log(Level::Error, &msg);
-                unsafe { (iso.image_unref)(image) };
                 notify.send(Event::BurnFailed { index, error: msg });
-                return;
+                return; // image dropt automatisch
             }
         };
         unsafe {
@@ -1395,22 +1520,20 @@ fn burn_files_job(
             {
                 let msg = lang.w_import_open_failed();
                 notify.log(Level::Error, &msg);
-                (iso.image_unref)(image);
                 notify.send(Event::BurnFailed { index, error: msg });
                 return;
             }
+            let ds = IsoDataSourceRef::new(iso, ds).expect("net op niet-null gecontroleerd");
             let mut ropts: *mut crate::isofs::IsoReadOpts = std::ptr::null_mut();
             if (iso.read_opts_new)(&mut ropts, 0) != ISO_SUCCESS || ropts.is_null() {
                 let msg = lang.w_read_opts_failed();
                 notify.log(Level::Error, &msg);
-                (iso.data_source_unref)(ds);
-                (iso.image_unref)(image);
                 notify.send(Event::BurnFailed { index, error: msg });
-                return;
+                return; // ds + image droppen automatisch
             }
             (iso.read_opts_set_start_block)(ropts, start_block as c_uint);
             let mut features: *mut crate::isofs::IsoReadImageFeatures = std::ptr::null_mut();
-            let r = (iso.image_import)(image, ds, ropts, &mut features);
+            let r = (iso.image_import)(image.handle(), ds.handle(), ropts, &mut features);
             if !features.is_null() {
                 let blocks = (iso.read_image_features_get_size)(features);
                 notify.log(
@@ -1424,12 +1547,10 @@ fn burn_files_job(
             if r != ISO_SUCCESS {
                 let msg = lang.w_import_failed();
                 notify.log(Level::Error, &msg);
-                (iso.data_source_unref)(ds);
-                (iso.image_unref)(image);
                 notify.send(Event::BurnFailed { index, error: msg });
-                return;
+                return; // ds + image droppen automatisch
             }
-            data_src = ds; // alive tot na de brand
+            data_src = Some(ds); // alive tot na de brand
         }
     }
 
@@ -1439,7 +1560,7 @@ fn burn_files_job(
     // map-node zelf toe.
     let mut add_errors: Vec<String> = Vec::new();
     unsafe {
-        let root = (iso.image_get_root)(image);
+        let root = (iso.image_get_root)(image.handle());
         let mut used_names: std::collections::HashSet<String> = std::collections::HashSet::new();
         for p in paths {
             let base = std::path::Path::new(p)
@@ -1476,7 +1597,7 @@ fn burn_files_job(
                     add_errors.push(format!("{p}: map toevoegen mislukt (code {r})"));
                     continue;
                 }
-                let r = (iso.tree_add_dir_rec)(image, dir, path_c.as_ptr());
+                let r = (iso.tree_add_dir_rec)(image.handle(), dir, path_c.as_ptr());
                 if r < 0 {
                     add_errors.push(format!("{p}: mapinhoud toevoegen mislukt (code {r})"));
                 } else {
@@ -1486,7 +1607,7 @@ fn burn_files_job(
                 // NB: retourwaarde = aantal nodes in parent bij succes, < 0 = fout.
                 let mut node: *mut crate::isofs::IsoNode = std::ptr::null_mut();
                 let r = (iso.tree_add_new_node)(
-                    image,
+                    image.handle(),
                     root,
                     name_c.as_ptr(),
                     path_c.as_ptr(),
@@ -1507,9 +1628,8 @@ fn burn_files_job(
         if add_errors.len() == paths.len() {
             let msg = lang.w_nothing_added();
             notify.log(Level::Error, &msg);
-            unsafe { (iso.image_unref)(image) };
             notify.send(Event::BurnFailed { index, error: msg });
-            return;
+            return; // image + data_src droppen automatisch
         }
     }
 
@@ -1517,25 +1637,22 @@ fn burn_files_job(
     // mocht het device zelf openen. De libisofs-data bron houdt het device
     // wel open (oude bestandsdata wordt tijdens het branden gelezen); een
     // niet-exclusieve grab laat dat toe.
-    if grab_and_check_media(st, &di, index, notify).is_err() {
-        unsafe { (iso.image_unref)(image) };
-        return;
-    }
+    let drive = match grab_and_check_media(st, &di, index, notify) {
+        Ok(d) => d,
+        Err(()) => return, // image + data_src droppen automatisch
+    };
 
     // Snelheid: maximaal (0) of een door de user gekozen maximum (kB/s).
-    let write_speed = if s.speed_max { 0 } else { s.speed_kbps };
-    unsafe { (st.raw.drive_set_speed)(di.drive, 0, write_speed) };
-    notify.log(Level::Info, lang.w_speed(s.speed_max, s.speed_kbps));
+    unsafe { set_write_speed(st, drive.handle(), s, notify) };
 
     // NWA: waar de nieuwe sessie begint (multi-session import).
     let (mut lba, mut nwa): (c_int, c_int) = (0, 0);
     let nwa_ok = unsafe {
-        (st.raw.disc_track_lba_nwa)(di.drive, std::ptr::null_mut(), 0, &mut lba, &mut nwa)
+        (st.raw.disc_track_lba_nwa)(drive.handle(), std::ptr::null_mut(), 0, &mut lba, &mut nwa)
     } == 1;
     if import_start_block.is_some() && !nwa_ok {
         let msg = lang.w_nwa_failed();
         notify.log(Level::Error, &msg);
-        unsafe { (iso.image_unref)(image) };
         notify.send(Event::BurnFailed { index, error: msg });
         return;
     }
@@ -1549,10 +1666,13 @@ fn burn_files_job(
         if (iso.write_opts_new)(&mut opts, 2) != ISO_SUCCESS || opts.is_null() {
             let msg = lang.w_isofs_opts_failed();
             notify.log(Level::Error, &msg);
-            (iso.image_unref)(image);
             notify.send(Event::BurnFailed { index, error: msg });
             return;
         }
+        IsoWriteOptsRef::new(iso, opts).expect("net op niet-null gecontroleerd")
+    };
+    unsafe {
+        let opts = iso_opts.handle();
         (iso.write_opts_set_iso_level)(opts, 3);
         (iso.write_opts_set_rockridge)(opts, 1);
         (iso.write_opts_set_joliet)(opts, 1);
@@ -1571,53 +1691,45 @@ fn burn_files_job(
             (iso.write_opts_set_appendable)(opts, 1);
             (iso.write_opts_set_ms_block)(opts, nwa as c_uint);
         }
-        opts
-    };
+    }
 
     // Image-layout berekenen en burn_source opvragen (kan even duren).
     notify.log(Level::Info, lang.w_layout());
     let src_raw = unsafe {
         let mut src: *mut ffi::BurnSource = std::ptr::null_mut();
-        let r = (iso.image_create_burn_source)(image, iso_opts, &mut src);
+        let r = (iso.image_create_burn_source)(image.handle(), iso_opts.handle(), &mut src);
         drain_iso_msgs(iso, notify);
         if r != ISO_SUCCESS || src.is_null() {
             let msg = lang.w_compose_failed();
             notify.log(Level::Error, &msg);
-            (iso.write_opts_free)(iso_opts);
-            (iso.image_unref)(image);
             notify.send(Event::BurnFailed { index, error: msg });
-            return;
+            return; // iso_opts + image + data_src droppen automatisch
         }
         src
     };
-
-    // Wrap de libisofs-bron in een libburn-FIFO (4 MiB): gladstrijkt de
-    // datastroom richting drive én maakt de fifo-vulling in de voortgang
-    // betekenisvol (zonder fifo blijft die permanent 0).
-    let fifo = unsafe { (st.raw.fifo_source_new)(src_raw, 2048, BURN_FIFO_CHUNKS, 0) };
-    unsafe { (st.raw.source_free)(src_raw) }; // fifo heeft een eigen referentie
-    if fifo.is_null() {
-        let msg = lang.w_fifo_failed();
-        notify.log(Level::Error, &msg);
-        unsafe {
-            (iso.write_opts_free)(iso_opts);
-            (iso.image_unref)(image);
+    // Eigen referentie op de libisofs-bron; de fifo hieronder neemt er zelf
+    // ook één. RAII garandeert dat src_raw altijd wordt vrijgegeven — ook als
+    // het maken van de fifo faalt.
+    let burn_src = OwnedSource::new(&st.raw, src_raw).expect("net op niet-null gecontroleerd");
+    let fifo = OwnedSource::new(&st.raw, unsafe {
+        (st.raw.fifo_source_new)(burn_src.handle(), 2048, BURN_FIFO_CHUNKS, 0)
+    });
+    drop(burn_src); // fifo heeft een eigen referentie
+    let source = match fifo {
+        Some(f) => f,
+        None => {
+            let msg = lang.w_fifo_failed();
+            notify.log(Level::Error, &msg);
+            notify.send(Event::BurnFailed { index, error: msg });
+            return;
         }
-        notify.send(Event::BurnFailed { index, error: msg });
-        return;
-    }
-    let src = fifo;
+    };
 
     // Grootte via de get_size-callback van de burn_source.
-    let size = unsafe { burn_source_get_size(src) };
+    let size = unsafe { burn_source_get_size(source.handle()) };
     if size <= 0 {
         let msg = lang.w_size_unknown();
         notify.log(Level::Error, &msg);
-        unsafe {
-            (st.raw.source_free)(src);
-            (iso.write_opts_free)(iso_opts);
-            (iso.image_unref)(image);
-        }
         notify.send(Event::BurnFailed { index, error: msg });
         return;
     }
@@ -1631,110 +1743,17 @@ fn burn_files_job(
         ),
     );
 
-    // Ruimtecheck (indicatief).
-    let avail = unsafe { (st.raw.disc_available_space)(di.drive, std::ptr::null_mut()) };
-    if avail >= 0 && (avail as i64) < size {
-        notify.log(
-            Level::Warning,
-            lang.w_image_size_warning(
-                &format_blocks(expected_sectors),
-                &format_blocks(avail as i32),
-            ),
-        );
-    }
-
-    // libburn-model: disc → session → track met de libisofs-bron.
-    let (disc, session, track) = unsafe {
-        let disc = (st.raw.disc_create)();
-        let session = (st.raw.session_create)();
-        let track = (st.raw.track_create)();
-        if disc.is_null()
-            || session.is_null()
-            || track.is_null()
-            || (st.raw.disc_add_session)(disc, session, ffi::BURN_POS_END) != 1
-            || (st.raw.session_add_track)(session, track, ffi::BURN_POS_END) != 1
-        {
-            let msg = lang.w_model_failed();
-            notify.log(Level::Error, &msg);
-            (st.raw.source_free)(src);
-            (iso.write_opts_free)(iso_opts);
-            (iso.image_unref)(image);
-            notify.send(Event::BurnFailed { index, error: msg });
-            return;
-        }
-        (disc, session, track)
-    };
-    let model_ok = unsafe {
-        (st.raw.track_set_source)(track, src) == 0 && (st.raw.track_set_size)(track, size) == 1
-    };
-    if !model_ok {
-        let msg = lang.w_attach_failed();
-        notify.log(Level::Error, &msg);
-        unsafe {
-            (st.raw.track_free)(track);
-            (st.raw.session_free)(session);
-            (st.raw.disc_free)(disc);
-            (st.raw.source_free)(src);
-            (iso.write_opts_free)(iso_opts);
-            (iso.image_unref)(image);
-        }
-        notify.send(Event::BurnFailed { index, error: msg });
-        return;
-    }
-    unsafe { (st.raw.track_define_data)(track, 0, s.padding_kib * 1024, 1, ffi::BURN_MODE1) };
-
-    let opts = match unsafe { make_write_opts(&st.raw, di.drive, disc, s, lang, notify) } {
-        Ok(o) => o,
-        Err(msg) => {
-            unsafe {
-                (st.raw.source_free)(src);
-                (st.raw.track_free)(track);
-                (st.raw.session_free)(session);
-                (st.raw.disc_free)(disc);
-                (iso.write_opts_free)(iso_opts);
-                (iso.image_unref)(image);
-            }
-            notify.send(Event::BurnFailed { index, error: msg });
-            return;
-        }
-    };
-
-    // Branden starten (asynchroon); de libisofs-objecten (image, write-opts,
-    // data-bron) blijven alive tot na de brand — oude bestandsdata wordt
-    // tijdens het schrijven van de schijf gelezen.
-    unsafe { (st.raw.disc_write)(opts, disc) };
-    notify.send(Event::BurnStarted {
-        index,
-        total_sectors: expected_sectors,
-        simulate: s.simulate,
-    });
-    notify.log(Level::Info, lang.w_burn_started(index, s.simulate));
-    active.push(ActiveJob {
-        index,
-        adr,
-        drive: di.drive,
-        kind: JobKind::Write {
-            simulate: s.simulate,
-        },
-        write: Some(WriteJob {
-            s: s.clone(),
-            res: WriteRes {
-                opts,
-                disc,
-                session,
-                track,
-                source: src,
-                data_src,
-                iso_opts,
-                image,
-            },
+    let setup = WriteSetup {
+        drive,
+        source,
+        iso: Some(IsoParts {
+            opts: iso_opts,
+            image,
+            data_src,
         }),
-        started: std::time::Instant::now(),
-        last_progress: std::time::Instant::now(),
-        last_pct: Some(i32::MIN),
-        last_sector: 0,
-        cancelled: false,
-    });
+        size_bytes: size,
+    };
+    start_write_job(st, &di, index, s, setup, lang, active, notify);
 }
 
 /// Geeft de imagegrootte terug via de get_size-callback van een burn_source
@@ -1765,22 +1784,22 @@ unsafe fn burn_source_get_size(src: *mut ffi::BurnSource) -> i64 {
     }
 }
 
-/// Grab de drive en controleer de media-status. Bij fout: log + BurnFailed +
-/// drive vrijgeven, Err(()).
+/// Grab de drive en controleer de media-status. Bij fout: log + BurnFailed,
+/// Err(()). Bij succes: een RAII-gegrabde drive — de caller hoeft hem niet
+/// handmatig vrij te geven (Drop doet dat), ook niet bij vroege returns.
 fn grab_and_check_media(
     st: &WorkerState,
     di: &DriveInfo,
     index: usize,
     notify: &Notifier,
-) -> Result<DiscStatus, ()> {
-    let grabbed = unsafe { (st.raw.drive_grab)(di.drive, 0) } == 1;
-    if !grabbed {
+) -> Result<GrabbedDrive, ()> {
+    let Some(drive) = GrabbedDrive::grab(&st.raw, di.drive) else {
         let adr = unsafe { adr_of(di, &st.raw) };
         let msg = st.lang.w_grab_failed(index, &adr);
         notify.log(Level::Error, &msg);
         notify.send(Event::BurnFailed { index, error: msg });
         return Err(());
-    }
+    };
 
     // Media-status bepalen (poll tot bekend).
     let mut status = DiscStatus::Unready;
@@ -1795,19 +1814,33 @@ fn grab_and_check_media(
     if status != DiscStatus::Blank && status != DiscStatus::Appendable {
         let msg = st.lang.w_media_not_writable(status);
         notify.log(Level::Error, &msg);
-        unsafe { (st.raw.drive_release)(di.drive, 0) };
         notify.send(Event::BurnFailed { index, error: msg });
-        return Err(());
+        return Err(()); // drive wordt door de RAII-wrapper vrijgegeven
     }
     if status == DiscStatus::Appendable {
         notify.log(Level::Warning, st.lang.w_media_appendable());
     }
-    Ok(status)
+    Ok(drive)
+}
+
+/// Zet de schrijfsnelheid op het maximum (0) of op een door de user gekozen
+/// maximum (kB/s). libburn brandt nooit sneller dan dit maximum en ook nooit
+/// sneller dan media/drive toelaten.
+unsafe fn set_write_speed(
+    st: &WorkerState,
+    drive: *mut ffi::BurnDrive,
+    s: &BurnSettings,
+    notify: &Notifier,
+) {
+    let write_speed = if s.speed_max { 0 } else { s.speed_kbps };
+    unsafe { (st.raw.drive_set_speed)(drive, 0, write_speed) };
+    notify.log(Level::Info, st.lang.w_speed(s.speed_max, s.speed_kbps));
 }
 
 /// Maakt de write-opts aan en stelt alles in volgens de GUI-instellingen
 /// (snelheid, simulatie, multi-session, underrun-proof, overburn, schrijfmodus
-/// met precheck). Bij fout: log + Err(reden).
+/// met precheck). Bij fout: log + Err(reden); de opts worden door RAII
+/// vrijgegeven.
 unsafe fn make_write_opts(
     raw: &RawLibburn,
     drive: *mut ffi::BurnDrive,
@@ -1815,18 +1848,17 @@ unsafe fn make_write_opts(
     s: &BurnSettings,
     lang: Lang,
     notify: &Notifier,
-) -> Result<*mut ffi::BurnWriteOpts, String> {
+) -> Result<OwnedWriteOpts, String> {
     use crate::settings::{MultiSession, WriteMode};
 
     unsafe {
-        let opts = (raw.write_opts_new)(drive);
-        if opts.is_null() {
+        let Some(opts) = OwnedWriteOpts::new(raw, (raw.write_opts_new)(drive)) else {
             let msg = lang.w_make_opts_failed();
             notify.log(Level::Error, &msg);
             return Err(msg);
-        }
-        (raw.write_opts_set_perform_opc)(opts, 0);
-        (raw.write_opts_set_simulate)(opts, s.simulate as c_int);
+        };
+        (raw.write_opts_set_perform_opc)(opts.handle(), 0);
+        (raw.write_opts_set_simulate)(opts.handle(), s.simulate as c_int);
         let mut multi = match s.multi_session {
             MultiSession::Yes => 1,
             MultiSession::No => 0,
@@ -1844,17 +1876,18 @@ unsafe fn make_write_opts(
                 multi = 0;
             }
         }
-        (raw.write_opts_set_multi)(opts, multi);
-        (raw.write_opts_set_underrun_proof)(opts, s.underrun_proof as c_int);
+        (raw.write_opts_set_multi)(opts.handle(), multi);
+        (raw.write_opts_set_underrun_proof)(opts.handle(), s.underrun_proof as c_int);
         if s.overburn {
-            (raw.write_opts_set_force)(opts, 1);
+            (raw.write_opts_set_force)(opts.handle(), 1);
             notify.log(Level::Info, lang.w_overburn_note());
         }
 
         match s.write_mode {
             WriteMode::Auto => {
                 let mut reasons = [0 as c_char; ffi::BURN_REASONS_LEN];
-                let wt = (raw.write_opts_auto_write_type)(opts, disc, reasons.as_mut_ptr(), 0);
+                let wt =
+                    (raw.write_opts_auto_write_type)(opts.handle(), disc, reasons.as_mut_ptr(), 0);
                 if wt == ffi::BURN_WRITE_NONE {
                     let reasons = cbuf_to_string(&reasons);
                     let mut msg = lang.w_write_mode_failed(&reasons);
@@ -1864,46 +1897,47 @@ unsafe fn make_write_opts(
                         msg.push_str(" — ");
                         msg.push_str(&hint);
                     }
-                    (raw.write_opts_free)(opts);
-                    return Err(msg);
+                    return Err(msg); // opts droppen automatisch
                 }
                 notify.log(Level::Info, lang.w_write_mode_auto(write_type_name(wt)));
             }
             WriteMode::Tao => {
-                if (raw.write_opts_set_write_type)(opts, ffi::BURN_WRITE_TAO, ffi::BURN_BLOCK_MODE1)
-                    != 1
+                if (raw.write_opts_set_write_type)(
+                    opts.handle(),
+                    ffi::BURN_WRITE_TAO,
+                    ffi::BURN_BLOCK_MODE1,
+                ) != 1
                 {
                     let msg = lang.w_tao_unsupported();
                     notify.log(Level::Error, &msg);
-                    (raw.write_opts_free)(opts);
                     return Err(msg);
                 }
                 notify.log(Level::Info, lang.w_write_mode_tao());
-                if let Some(err) = precheck_write_opts(raw, opts, disc, s, lang) {
+                if let Some(err) = precheck_write_opts(raw, opts.handle(), disc, s, lang) {
                     notify.log(Level::Error, &err);
                     if let Some(hint) = simulation_hint(s, &err, lang) {
                         notify.log(Level::Warning, hint);
                     }
-                    (raw.write_opts_free)(opts);
                     return Err(err);
                 }
             }
             WriteMode::Sao => {
-                if (raw.write_opts_set_write_type)(opts, ffi::BURN_WRITE_SAO, ffi::BURN_BLOCK_SAO)
-                    != 1
+                if (raw.write_opts_set_write_type)(
+                    opts.handle(),
+                    ffi::BURN_WRITE_SAO,
+                    ffi::BURN_BLOCK_SAO,
+                ) != 1
                 {
                     let msg = lang.w_sao_unsupported();
                     notify.log(Level::Error, &msg);
-                    (raw.write_opts_free)(opts);
                     return Err(msg);
                 }
                 notify.log(Level::Info, lang.w_write_mode_sao());
-                if let Some(err) = precheck_write_opts(raw, opts, disc, s, lang) {
+                if let Some(err) = precheck_write_opts(raw, opts.handle(), disc, s, lang) {
                     notify.log(Level::Error, &err);
                     if let Some(hint) = simulation_hint(s, &err, lang) {
                         notify.log(Level::Warning, hint);
                     }
-                    (raw.write_opts_free)(opts);
                     return Err(err);
                 }
             }
@@ -1921,7 +1955,7 @@ unsafe fn make_write_opts(
 unsafe fn poll_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier) -> bool {
     unsafe {
         let mut prog = Progress::default();
-        let ds = DriveStatus::from_raw((st.raw.drive_get_status)(job.drive, &mut prog));
+        let ds = DriveStatus::from_raw((st.raw.drive_get_status)(job.drive.handle(), &mut prog));
         if ds == DriveStatus::Idle {
             return true;
         }
@@ -1958,7 +1992,7 @@ unsafe fn poll_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier) -> 
                 } else {
                     0.0
                 };
-                let fifo_pct = fifo_fill_pct(&st.raw, wj.res.source);
+                let fifo_pct = fifo_fill_pct(&st.raw, wj.res.source.handle());
                 notify.send(Event::BurnProgress {
                     index: job.index,
                     sector: prog.sector,
@@ -1996,9 +2030,11 @@ unsafe fn poll_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier) -> 
 }
 
 /// Werk één afgeronde job af: resultaat, opruimen, eject-reeks en events.
+/// De RAII-handles geven de libburn/libisofs-objecten vrij zodra ze hier
+/// uit scope vallen — ook als een van de stappen hieronder faalt.
 unsafe fn finalize_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier) {
     unsafe {
-        let well = (st.raw.drive_wrote_well)(job.drive) == 1;
+        let well = (st.raw.drive_wrote_well)(job.drive.handle()) == 1;
         // Brandduur nu vastleggen: na de eject-reeks (met pauzes) zou de
         // gemiddelde snelheid anders te laag uitvallen.
         let burn_elapsed = job.started.elapsed().as_secs_f64();
@@ -2007,27 +2043,6 @@ unsafe fn finalize_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier)
         match &mut job.kind {
             JobKind::Write { .. } => {
                 if let Some(wj) = job.write.take() {
-                    (st.raw.write_opts_free)(wj.res.opts);
-                    (st.raw.source_free)(wj.res.source);
-                    (st.raw.track_free)(wj.res.track);
-                    (st.raw.session_free)(wj.res.session);
-                    (st.raw.disc_free)(wj.res.disc);
-                    if !wj.res.iso_opts.is_null() {
-                        if let Some(iso) = st.isofs.as_ref() {
-                            (iso.write_opts_free)(wj.res.iso_opts);
-                        }
-                    }
-                    if !wj.res.image.is_null() {
-                        if let Some(iso) = st.isofs.as_ref() {
-                            (iso.image_unref)(wj.res.image);
-                        }
-                    }
-                    if !wj.res.data_src.is_null() {
-                        if let Some(iso) = st.isofs.as_ref() {
-                            (iso.data_source_unref)(wj.res.data_src);
-                        }
-                    }
-
                     // Eject-reeks (stap 8): een eject van een AANGEKOPPELDE
                     // schijf wordt door de kernel geweigerd (EBUSY) — eerst
                     // unmounten, dan opnieuw grabben voor het eject-verzoek.
@@ -2039,13 +2054,13 @@ unsafe fn finalize_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier)
                         let mut profile_no: c_int = 0;
                         let mut pname = [0 as c_char; 80];
                         let _ = (st.raw.disc_get_profile)(
-                            job.drive,
+                            job.drive.handle(),
                             &mut profile_no,
                             pname.as_mut_ptr(),
                         );
                         let overwritable = profile_is_overwritable(profile_no);
                         let settle_ms: u64 = if overwritable { 2000 } else { 300 };
-                        (st.raw.drive_release)(job.drive, 0);
+                        job.drive.release_now(0);
                         if overwritable {
                             notify.log(Level::Info, st.lang.w_eject_settle(settle_ms));
                         }
@@ -2059,7 +2074,7 @@ unsafe fn finalize_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier)
                         // zijn; een paar pogingen met pauze lost dat meestal.
                         let mut grabbed = false;
                         for poging in 1..=5 {
-                            if (st.raw.drive_grab)(job.drive, 0) == 1 {
+                            if job.drive.regrab() {
                                 grabbed = true;
                                 break;
                             }
@@ -2067,14 +2082,14 @@ unsafe fn finalize_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier)
                             thread::sleep(Duration::from_secs(1));
                         }
                         if grabbed {
-                            (st.raw.drive_release)(job.drive, 1);
+                            job.drive.release_now(1);
                             notify.log(Level::Info, st.lang.w_eject_sent());
                             notify.send(Event::MediaEjected { index: job.index });
                         } else {
                             notify.log(Level::Warning, st.lang.w_eject_manual());
                         }
                     } else {
-                        (st.raw.drive_release)(job.drive, 0);
+                        job.drive.release_now(0);
                         notify.log(Level::Info, st.lang.w_drive_released());
                     }
 
@@ -2124,11 +2139,13 @@ unsafe fn finalize_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier)
                             error: msg,
                         });
                     }
+                    // wj (model/opts/source/iso) dropt hier: alle
+                    // libburn/libisofs-objecten worden netjes vrijgegeven.
                 }
             }
             JobKind::Erase => {
-                (st.raw.drive_re_assess)(job.drive, 0);
-                (st.raw.drive_release)(job.drive, 0);
+                (st.raw.drive_re_assess)(job.drive.handle(), 0);
+                job.drive.release_now(0);
                 if job.cancelled {
                     notify.log(Level::Warning, st.lang.w_erase_cancelled());
                     notify.send(Event::MaintCancelled {
@@ -2152,8 +2169,8 @@ unsafe fn finalize_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier)
                 }
             }
             JobKind::Format => {
-                (st.raw.drive_re_assess)(job.drive, 0);
-                (st.raw.drive_release)(job.drive, 0);
+                (st.raw.drive_re_assess)(job.drive.handle(), 0);
+                job.drive.release_now(0);
                 if job.cancelled {
                     notify.log(Level::Warning, st.lang.w_restore_cancelled());
                     notify.send(Event::MaintCancelled {
@@ -2186,81 +2203,53 @@ unsafe fn finalize_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier)
     }
 }
 
-/// Bouwt het disc-model op: disc → session → track met file-bron + FIFO,
-/// plus de write-opts volgens de instellingen. Geeft None terug bij falen
-/// (met logfeedback over de oorzaak).
-unsafe fn build_burn_model(
+/// Bouwt het libburn-model op: disc → session → track met de gegeven bron
+/// (file+FIFO of libisofs-burn_source), inclusief grootte, padding en
+/// datatrack-definitie. Bij falen: log + Err(reden); de al aangemaakte delen
+/// worden door RAII vrijgegeven.
+unsafe fn build_model_with_source(
     raw: &RawLibburn,
-    drive: *mut ffi::BurnDrive,
-    path_c: *const c_char,
-    file_size: u64,
-    s: &BurnSettings,
+    source: &OwnedSource,
+    size_bytes: i64,
+    padding_kib: i32,
     lang: Lang,
     notify: &Notifier,
-) -> Result<
-    (
-        *mut ffi::BurnDisc,
-        *mut ffi::BurnSession,
-        *mut ffi::BurnTrack,
-        *mut ffi::BurnSource,
-        *mut ffi::BurnWriteOpts,
-    ),
-    String,
-> {
+) -> Result<BurnModel, String> {
     // Edition 2024: onveilige operaties expliciet in een `unsafe`-blok.
     unsafe {
-        let disc = (raw.disc_create)();
-        let session = (raw.session_create)();
-        let track = (raw.track_create)();
-        if disc.is_null() || session.is_null() || track.is_null() {
+        let track = OwnedTrack::new(raw, (raw.track_create)());
+        let session = OwnedSession::new(raw, (raw.session_create)());
+        let disc = OwnedDisc::new(raw, (raw.disc_create)());
+        let (Some(track), Some(session), Some(disc)) = (track, session, disc) else {
             let msg = lang.w_model_create_failed();
             notify.log(Level::Error, &msg);
             return Err(msg);
-        }
-        if (raw.disc_add_session)(disc, session, ffi::BURN_POS_END) != 1
-            || (raw.session_add_track)(session, track, ffi::BURN_POS_END) != 1
+        };
+        if (raw.disc_add_session)(disc.handle(), session.handle(), ffi::BURN_POS_END) != 1
+            || (raw.session_add_track)(session.handle(), track.handle(), ffi::BURN_POS_END) != 1
         {
             let msg = lang.w_model_add_failed();
             notify.log(Level::Error, &msg);
-            (raw.track_free)(track);
-            (raw.session_free)(session);
-            (raw.disc_free)(disc);
             return Err(msg);
         }
-
-        // Bron: bestand → FIFO (4 MiB) → track.
-        let file_source = (raw.file_source_new)(path_c, std::ptr::null());
-        if file_source.is_null() {
-            let msg = lang.w_file_source_failed();
-            notify.log(Level::Error, &msg);
-            return Err(msg);
-        }
-        let fifo = (raw.fifo_source_new)(file_source, 2048, BURN_FIFO_CHUNKS, 0);
-        (raw.source_free)(file_source); // fifo heeft een eigen referentie
-        if fifo.is_null() {
-            let msg = lang.w_fifo_source_failed();
-            notify.log(Level::Error, &msg);
-            return Err(msg);
-        }
-        if (raw.track_set_source)(track, fifo) != 0 {
+        if (raw.track_set_source)(track.handle(), source.handle()) != 0 {
             let msg = lang.w_source_attach_failed();
             notify.log(Level::Error, &msg);
-            (raw.source_free)(fifo);
             return Err(msg);
         }
-        if (raw.track_set_size)(track, file_size as c_longlong) != 1 {
+        if (raw.track_set_size)(track.handle(), size_bytes as c_longlong) != 1 {
             let msg = lang.w_track_size_failed();
             notify.log(Level::Error, &msg);
-            (raw.source_free)(fifo);
             return Err(msg);
         }
         // Datatrack: geen offset, padding als staart-nullen, laatste sector vullen.
-        (raw.track_define_data)(track, 0, s.padding_kib * 1024, 1, ffi::BURN_MODE1);
+        (raw.track_define_data)(track.handle(), 0, padding_kib * 1024, 1, ffi::BURN_MODE1);
 
-        // Write-opts + schrijfmodus (gedeelde helper).
-        let opts = make_write_opts(raw, drive, disc, s, lang, notify)?;
-
-        Ok((disc, session, track, fifo, opts))
+        Ok(BurnModel {
+            track,
+            session,
+            disc,
+        })
     }
 }
 
@@ -2416,8 +2405,7 @@ fn erase_job(
     });
     notify.log(Level::Info, lang.w_erase_starting(index, fast));
 
-    let grabbed = unsafe { (st.raw.drive_grab)(di.drive, 0) } == 1;
-    if !grabbed {
+    let Some(drive) = GrabbedDrive::grab(&st.raw, di.drive) else {
         let adr = unsafe { adr_of(&di, &st.raw) };
         let msg = st.lang.w_grab_failed(index, &adr);
         notify.log(Level::Error, &msg);
@@ -2427,28 +2415,27 @@ fn erase_job(
             error: msg,
         });
         return;
-    }
+    };
 
     let mut profile_no: c_int = 0;
     let mut pname = [0 as c_char; 80];
-    let _ = unsafe { (st.raw.disc_get_profile)(di.drive, &mut profile_no, pname.as_mut_ptr()) };
+    let _ =
+        unsafe { (st.raw.disc_get_profile)(drive.handle(), &mut profile_no, pname.as_mut_ptr()) };
     if profile_is_overwritable(profile_no) {
         let msg = st.lang.w_erase_overwritable(profile_no);
         notify.log(Level::Error, &msg);
-        unsafe { (st.raw.drive_release)(di.drive, 0) };
         notify.send(Event::MaintFailed {
             kind: MaintKind::Erase,
             index,
             error: msg,
         });
-        return;
+        return; // drive wordt door RAII vrijgegeven
     }
     let erasable =
-        unsafe { (st.raw.disc_erasable)(di.drive) } != 0 || profile_is_rewritable(profile_no);
+        unsafe { (st.raw.disc_erasable)(drive.handle()) } != 0 || profile_is_rewritable(profile_no);
     if !erasable {
         let msg = st.lang.w_erase_not_rewritable();
         notify.log(Level::Error, &msg);
-        unsafe { (st.raw.drive_release)(di.drive, 0) };
         notify.send(Event::MaintFailed {
             kind: MaintKind::Erase,
             index,
@@ -2457,12 +2444,12 @@ fn erase_job(
         return;
     }
 
-    unsafe { (st.raw.disc_erase)(di.drive, fast as c_int) };
+    unsafe { (st.raw.disc_erase)(drive.handle(), fast as c_int) };
     let adr = unsafe { adr_of(&di, &st.raw) };
     active.push(ActiveJob {
         index,
         adr,
-        drive: di.drive,
+        drive,
         kind: JobKind::Erase,
         write: None,
         started: std::time::Instant::now(),
@@ -2596,8 +2583,7 @@ fn format_job(
         "SCSI command log on: /tmp/libburn_sg_command_log",
     );
 
-    let grabbed = unsafe { (st.raw.drive_grab)(di.drive, 0) } == 1;
-    if !grabbed {
+    let Some(drive) = GrabbedDrive::grab(&st.raw, di.drive) else {
         let adr = unsafe { adr_of(&di, &st.raw) };
         let msg = st.lang.w_grab_failed(index, &adr);
         notify.log(Level::Error, &msg);
@@ -2607,21 +2593,21 @@ fn format_job(
             error: msg,
         });
         return;
-    }
+    };
 
     let mut profile_no: c_int = 0;
     let mut pname = [0 as c_char; 80];
-    let _ = unsafe { (st.raw.disc_get_profile)(di.drive, &mut profile_no, pname.as_mut_ptr()) };
+    let _ =
+        unsafe { (st.raw.disc_get_profile)(drive.handle(), &mut profile_no, pname.as_mut_ptr()) };
     if !profile_is_formattable(profile_no) {
         let msg = lang.w_restore_not_applicable(profile_no);
         notify.log(Level::Error, &msg);
-        unsafe { (st.raw.drive_release)(di.drive, 0) };
         notify.send(Event::MaintFailed {
             kind: MaintKind::Format,
             index,
             error: msg,
         });
-        return;
+        return; // drive wordt door RAII vrijgegeven
     }
 
     // Diagnostiek: welke format-types biedt de drive voor deze media aan?
@@ -2649,12 +2635,12 @@ fn format_job(
         notify.log(Level::Info, lang.w_restore_cert_skip());
     }
     notify.log(Level::Info, lang.w_restore_running());
-    unsafe { (st.raw.disc_format)(di.drive, 0, fmt_flag) };
+    unsafe { (st.raw.disc_format)(drive.handle(), 0, fmt_flag) };
     let adr = unsafe { adr_of(&di, &st.raw) };
     active.push(ActiveJob {
         index,
         adr,
-        drive: di.drive,
+        drive,
         kind: JobKind::Format,
         write: None,
         started: std::time::Instant::now(),
@@ -2705,23 +2691,22 @@ fn read_disc(
         return;
     }
 
-    let grabbed = unsafe { (st.raw.drive_grab)(di.drive, 0) } == 1;
-    if !grabbed {
+    let Some(mut drive) = GrabbedDrive::grab(&st.raw, di.drive) else {
         let adr = unsafe { adr_of(&di, &st.raw) };
         let msg = st.lang.w_grab_failed(index, &adr);
         notify.log(Level::Error, msg.clone());
         notify.send(Event::ReadFailed { index, error: msg });
         return;
-    }
+    };
 
     // Capaciteit bepalen (blokken van 2048 bytes).
     let mut capacity: c_int = 0;
-    if unsafe { (st.raw.get_read_capacity)(di.drive, &mut capacity, 0) } != 1 || capacity <= 0 {
-        unsafe { (st.raw.drive_release)(di.drive, 0) };
+    if unsafe { (st.raw.get_read_capacity)(drive.handle(), &mut capacity, 0) } != 1 || capacity <= 0
+    {
         let msg = lang.w_read_no_capacity();
         notify.log(Level::Error, format!("{}: {msg}", lang.w_station(index)));
         notify.send(Event::ReadFailed { index, error: msg });
-        return;
+        return; // drive wordt door RAII vrijgegeven
     }
     let total_blocks = capacity as i64;
     notify.log(
@@ -2736,7 +2721,6 @@ fn read_disc(
     let mut file = match std::fs::File::create_new(path) {
         Ok(f) => f,
         Err(e) => {
-            unsafe { (st.raw.drive_release)(di.drive, 0) };
             let msg = lang.w_read_create_failed(path, &e.to_string());
             notify.log(Level::Error, format!("{}: {msg}", lang.w_station(index)));
             notify.send(Event::ReadFailed { index, error: msg });
@@ -2777,7 +2761,7 @@ fn read_disc(
         let mut got: c_longlong = 0;
         let ret = unsafe {
             (st.raw.read_data)(
-                di.drive,
+                drive.handle(),
                 byte_address,
                 buf.as_mut_ptr() as *mut c_char,
                 want_bytes,
@@ -2820,7 +2804,7 @@ fn read_disc(
     }
 
     drop(file);
-    unsafe { (st.raw.drive_release)(di.drive, 0) };
+    drive.release_now(0);
 
     if cancelled {
         notify.log(
@@ -2841,12 +2825,13 @@ fn read_disc(
 }
 
 fn shutdown_lib(state: Option<WorkerState>, lang: Lang, notify: &Notifier) {
-    let Some(mut st) = state else { return };
-    free_drive_list(&mut st);
-    unsafe { (st.raw.finish)() };
+    let Some(st) = state else { return };
+    let had_isofs = st.isofs.is_some();
+    // RAII (stap 10c): de Drop-impl van WorkerState geeft de drive-lijst vrij
+    // en sluit libburn + libisofs netjes af, in die volgorde.
+    drop(st);
     notify.log(Level::Info, lang.w_lib_finished());
-    if let Some(iso) = st.isofs {
-        unsafe { (iso.finish)() };
+    if had_isofs {
         notify.log(Level::Info, lang.w_isofs_finished());
     }
 }
@@ -2982,6 +2967,20 @@ mod tests {
 
     use crate::ffi::tests::LIBBURN_LOCK;
 
+    /// Guard die burn_finish() aanroept bij drop — ook als de test halverwege
+    /// faalt — zodat volgende tests op een schone library-status beginnen.
+    struct FinishOnDrop {
+        lib: Option<RawLibburn>,
+    }
+
+    impl Drop for FinishOnDrop {
+        fn drop(&mut self) {
+            if let Some(raw) = &self.lib {
+                unsafe { (raw.finish)() };
+            }
+        }
+    }
+
     /// Headless rooktest van de volledige worker-flow: library laden → scannen
     /// → drive-info converteren (controleert de struct-layout tegen de echte
     /// library). Slaat over als libburn niet geïnstalleerd is.
@@ -3031,5 +3030,178 @@ mod tests {
         }
         drop(cmd_tx); // worker netjes laten stoppen
         assert!(terminal, "worker moest met ScanDone of ScanFailed eindigen");
+    }
+
+    /// Shutdown middenin een lopende worker-actie (hier: de scan): het
+    /// commando wordt afgehandeld zodra de actie klaar of afgebroken is, de
+    /// worker sluit de library netjes af en eindigt met WorkerStopped.
+    #[test]
+    fn worker_shutdown_during_scan() {
+        let _guard = LIBBURN_LOCK.lock().unwrap();
+
+        let (cmd_tx, cmd_rx) = channel::<Command>();
+        let (event_tx, event_rx) = channel::<Event>();
+        let handle = spawn(cmd_rx, event_tx, egui::Context::default());
+
+        cmd_tx
+            .send(Command::LoadLibrary {
+                path: None,
+                exclusive: true,
+            })
+            .unwrap();
+        cmd_tx.send(Command::Scan).unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        let (mut scan_seen, mut stopped) = (false, false);
+        while std::time::Instant::now() < deadline {
+            match event_rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(Event::LibLoaded { .. }) => {}
+                Ok(Event::ScanStarted) => {
+                    scan_seen = true;
+                    // Shutdown middenin de scan-actie sturen.
+                    cmd_tx.send(Command::Shutdown).unwrap();
+                }
+                Ok(Event::ScanDone { .. }) | Ok(Event::ScanFailed { .. }) => {
+                    // De scan kon ook vóór de shutdown klaar zijn; ook prima.
+                }
+                Ok(Event::LibLoadFailed { error }) => {
+                    eprintln!("overgeslagen: libburn niet beschikbaar ({error})");
+                    break;
+                }
+                Ok(Event::WorkerStopped) => {
+                    stopped = true;
+                    break;
+                }
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+        drop(cmd_tx);
+        if !scan_seen {
+            eprintln!("overgeslagen: worker kwam niet op gang");
+            return;
+        }
+        assert!(stopped, "worker moet na Shutdown WorkerStopped sturen");
+        handle.join().expect("worker-thread moet netjes eindigen");
+    }
+
+    /// De echte shutdown-tijdens-job test (stap 10c): een asynchrone brandjob
+    /// op een `stdio:`-pseudodrive (bestand i.p.v. echte brander) wordt
+    /// middenin geannuleerd via `burn_drive_cancel` — exact wat
+    /// `Command::Shutdown` doet met actieve jobs. Daarna moet alles netjes
+    /// opruimen (RAII-wrappers), binnen een vaste deadline, zonder hangen of
+    /// dubbele free's.
+    #[test]
+    fn shutdown_during_stdio_burn() {
+        use crate::raii::{GrabbedDrive, OwnedSource};
+
+        let _guard = LIBBURN_LOCK.lock().unwrap();
+        let raw = match RawLibburn::load("libburn.so.4") {
+            Ok(raw) => raw,
+            Err(e) => {
+                eprintln!("overgeslagen: libburn niet beschikbaar ({e})");
+                return;
+            }
+        };
+        unsafe {
+            assert_eq!((raw.initialize)(), 1, "burn_initialize moet 1 teruggeven");
+        }
+        let guard = FinishOnDrop { lib: Some(raw) };
+        let raw = guard.lib.as_ref().unwrap();
+
+        // Bronbestand met vaste payload (sparse → inhoud = nullen).
+        let size_bytes: i64 = 16 * 1024 * 1024;
+        let pid = std::process::id();
+        let src_path = std::env::temp_dir().join(format!("burnr-test-src-{pid}.bin"));
+        std::fs::File::create(&src_path)
+            .unwrap()
+            .set_len(size_bytes as u64)
+            .unwrap();
+
+        // stdio-pseudodrive (drive role 2): asynchrone brandjob naar een
+        // bestand — een echte write-job zonder echte hardware.
+        let out_path = std::env::temp_dir().join(format!("burnr-test-out-{pid}.img"));
+        let adr_c = std::ffi::CString::new(format!("stdio:{}", out_path.display())).unwrap();
+        let mut infos: *mut DriveInfo = std::ptr::null_mut();
+        let r = unsafe { (raw.drive_scan_and_grab)(&mut infos, adr_c.as_ptr() as *mut c_char, 0) };
+        if r != 1 || infos.is_null() {
+            eprintln!("overgeslagen: stdio-pseudodrive niet beschikbaar (r={r})");
+            let _ = std::fs::remove_file(&src_path);
+            return;
+        }
+        let drive_ptr = unsafe { (*infos).drive };
+        let mut drive = GrabbedDrive::assume_grabbed(raw, drive_ptr);
+
+        // Bron → FIFO (4 MiB): dezelfde opzet als de echte brandflows.
+        let src_c = std::ffi::CString::new(src_path.to_str().unwrap()).unwrap();
+        let file_src = OwnedSource::new(raw, unsafe {
+            (raw.file_source_new)(src_c.as_ptr(), std::ptr::null())
+        })
+        .expect("file source moet bestaan");
+        let source = OwnedSource::new(raw, unsafe {
+            (raw.fifo_source_new)(file_src.handle(), 2048, BURN_FIFO_CHUNKS, 0)
+        })
+        .expect("fifo source moet bestaan");
+        drop(file_src); // fifo heeft een eigen referentie
+
+        // Disc-model + write-opts via de gedeelde RAII-helpers.
+        let (tx, _rx) = channel::<Event>();
+        let notify = Notifier {
+            tx: &tx,
+            ctx: egui::Context::default(),
+        };
+        let lang = Lang::default();
+        let model = unsafe { build_model_with_source(raw, &source, size_bytes, 0, lang, &notify) }
+            .expect("disc-model bouwen op stdio-drive");
+        let s = BurnSettings::default();
+        let opts =
+            unsafe { make_write_opts(raw, drive.handle(), model.disc.handle(), &s, lang, &notify) }
+                .expect("write-opts op stdio-drive");
+
+        // Branden starten en ONMIDDELLIJK annuleren.
+        unsafe { (raw.disc_write)(opts.handle(), model.disc.handle()) };
+        unsafe { (raw.drive_cancel)(drive.handle()) };
+
+        // Poll tot de drive weer IDLE is — met deadline, de regressietest
+        // tegen een hang bij afsluiten tijdens een job.
+        let started = std::time::Instant::now();
+        loop {
+            let mut prog = Progress::default();
+            let ds =
+                DriveStatus::from_raw(unsafe { (raw.drive_get_status)(drive.handle(), &mut prog) });
+            if ds == DriveStatus::Idle {
+                break;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(30),
+                "drive kwam niet binnen 30 s terug op IDLE na cancel tijdens de job"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let wrote_well = unsafe { (raw.drive_wrote_well)(drive.handle()) } == 1;
+        eprintln!(
+            "stdio-job geannuleerd en netjes afgerond in {} ms; wrote_well={wrote_well}",
+            started.elapsed().as_millis()
+        );
+        if wrote_well {
+            // De job was sneller klaar dan de cancel: dan moet er echt de
+            // volledige payload geschreven zijn.
+            let len = std::fs::metadata(&out_path).map(|m| m.len()).unwrap_or(0);
+            assert!(
+                len >= size_bytes as u64,
+                "afgeronde brand moet de volledige payload schrijven (got {len})"
+            );
+        }
+
+        // Alles droppen: model/opts/source geven hun handles vrij (RAII),
+        // daarna de drive en de drive-info-array. Geen van deze stappen mag
+        // crashen — dubbele free's zijn precies wat de RAII-pass voorkomt.
+        drop(opts);
+        drop(model);
+        drop(source);
+        drive.release_now(0);
+        unsafe { (raw.drive_info_free)(infos) };
+        let _ = std::fs::remove_file(&src_path);
+        let _ = std::fs::remove_file(&out_path);
     }
 }
