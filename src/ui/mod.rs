@@ -1,10 +1,72 @@
 //! UI-panelen van de applicatie.
 
+pub mod about;
 pub mod details_panel;
 pub mod drives_panel;
 pub mod log_panel;
 pub mod settings_panel;
 pub mod top_bar;
+
+use crate::app::Theme;
+
+/// Past het kleurthema toe (stap 10b-8). Dark is de bestaande look; Soft
+/// houdt de donkere basis maar licht de panelen op; Light is het lichte
+/// egui-thema met een aangepaste paneelvulling.
+pub fn apply_theme(ctx: &egui::Context, theme: Theme) {
+    match theme {
+        Theme::Dark => {
+            ctx.set_theme(egui::ThemePreference::Dark);
+            ctx.all_styles_mut(|style| {
+                style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+                style.visuals.panel_fill = egui::Color32::from_rgb(24, 26, 31);
+            });
+        }
+        Theme::Soft => {
+            ctx.set_theme(egui::ThemePreference::Dark);
+            ctx.all_styles_mut(|style| {
+                style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+                style.visuals.panel_fill = egui::Color32::from_rgb(43, 46, 54);
+            });
+        }
+        Theme::Light => {
+            ctx.set_theme(egui::ThemePreference::Light);
+            ctx.all_styles_mut(|style| {
+                style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+                style.visuals.panel_fill = egui::Color32::from_rgb(238, 240, 244);
+            });
+        }
+        Theme::HighContrast => {
+            ctx.set_theme(egui::ThemePreference::Dark);
+            ctx.all_styles_mut(|style| {
+                style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+                style.visuals.panel_fill = egui::Color32::BLACK;
+                // Maximale leesbaarheid: élke widget-tekst in puur wit
+                // (text_color() leest fg_stroke.color).
+                for widget in [
+                    &mut style.visuals.widgets.noninteractive,
+                    &mut style.visuals.widgets.inactive,
+                    &mut style.visuals.widgets.hovered,
+                    &mut style.visuals.widgets.active,
+                    &mut style.visuals.widgets.open,
+                ] {
+                    widget.fg_stroke.color = egui::Color32::WHITE;
+                }
+                style.visuals.hyperlink_color = egui::Color32::from_rgb(150, 195, 255);
+            });
+        }
+    }
+}
+
+/// Primaire actie-knop in de accentkleur (blauw) met donkere tekst — voor
+/// de hoofdacties per eiland (inspecteren, branden, samenstellen, kopiëren).
+pub fn primary_button(text: &str) -> egui::Button<'_> {
+    egui::Button::new(
+        egui::RichText::new(text)
+            .strong()
+            .color(egui::Color32::from_rgb(18, 22, 30)),
+    )
+    .fill(colors::ACCENT)
+}
 
 /// Vaste accentkleuren die door de panelen worden gedeeld.
 pub mod colors {

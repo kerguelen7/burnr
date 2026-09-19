@@ -38,6 +38,33 @@ pub enum BurnSourceKind {
     FileSet,
 }
 
+/// Kleurthema van de interface (stap 10b-8). Dark is de bestaande look;
+/// Soft is een donkere tussenvariant met lichtere panelen, Light is het
+/// lichte egui-thema met aangepaste paneelvulling en HighContrast is zwart
+/// met puur witte tekst voor maximale leesbaarheid.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub enum Theme {
+    #[default]
+    Dark,
+    Soft,
+    Light,
+    HighContrast,
+}
+
+impl Theme {
+    pub const ALL: [Theme; 4] = [Theme::Dark, Theme::Soft, Theme::Light, Theme::HighContrast];
+
+    /// Taalneutrale naam voor de keuzelijst.
+    pub fn label(self) -> &'static str {
+        match self {
+            Theme::Dark => "Dark",
+            Theme::Soft => "Soft",
+            Theme::Light => "Light",
+            Theme::HighContrast => "High contrast",
+        }
+    }
+}
+
 /// Status die tussen sessies bewaard wordt (stap 8, eframe-persistence).
 /// Velden zijn Option zodat oudere opslagbestanden zonder fouten laden.
 #[derive(serde::Serialize, serde::Deserialize, Default)]
@@ -49,6 +76,7 @@ pub struct PersistedState {
     pub read_path: Option<String>,
     pub log_filter: Option<[bool; 4]>,
     pub language: Option<Lang>,
+    pub theme: Option<Theme>,
 }
 
 impl PersistedState {
@@ -61,6 +89,7 @@ impl PersistedState {
             read_path: Some(app.read_path.clone()),
             log_filter: Some(app.log_filter.0),
             language: Some(app.lang),
+            theme: Some(app.theme),
         }
     }
 }
@@ -177,6 +206,12 @@ pub struct App {
     pub auto_scroll: bool,
     /// Interfacetaal (stap 10b; de tekstcatalogus groeit per deel-stap).
     pub lang: Lang,
+    /// Kleurthema (stap 10b-8).
+    pub theme: Theme,
+    /// About-box open? (niet gepersisteerd)
+    pub show_about: bool,
+    /// libisofs-versie volgens de worker (None = niet geladen).
+    pub isofs_version: Option<String>,
     /// App-icoon als egui-texture voor de top bar (één keer gedecodeerd).
     pub icon: Option<egui::TextureHandle>,
 }
@@ -235,6 +270,9 @@ impl App {
             log_filter: LogFilter::default(),
             auto_scroll: true,
             lang: Lang::default(),
+            theme: Theme::default(),
+            show_about: false,
+            isofs_version: None,
             icon,
         };
 
@@ -264,6 +302,9 @@ impl App {
                 if let Some(l) = p.language {
                     app.lang = l;
                 }
+                if let Some(v) = p.theme {
+                    app.theme = v;
+                }
                 app.log
                     .push(Level::Info, app.lang.texts().app_log.settings_loaded);
             }
@@ -272,6 +313,8 @@ impl App {
         // De worker start op de default-taal; stuur de (mogelijk geladen)
         // taal direct mee zodat diens logregels later meelopen (10b-6).
         app.send(Command::SetLanguage(app.lang));
+        // Thema toepassen ná het laden van de opgeslagen voorkeur.
+        ui::apply_theme(&cc.egui_ctx, app.theme);
         app.log.push(Level::Info, app.lang.texts().app_log.started);
         app.send(Command::LoadLibrary {
             path: None,
@@ -288,6 +331,15 @@ impl App {
         }
         self.lang = lang;
         self.send(Command::SetLanguage(lang));
+    }
+
+    /// Kleurthema bijwerken en direct toepassen.
+    pub fn set_theme(&mut self, ctx: &egui::Context, theme: Theme) {
+        if self.theme == theme {
+            return;
+        }
+        self.theme = theme;
+        ui::apply_theme(ctx, theme);
     }
 
     fn send(&mut self, cmd: Command) {
@@ -581,6 +633,13 @@ impl App {
                 self.lib_state = LibState::Failed { error };
                 self.auto_scan_queued = false;
             }
+            Event::IsofsLoaded { version } => {
+                self.isofs_version = if version.is_empty() {
+                    None
+                } else {
+                    Some(version)
+                };
+            }
             Event::ScanStarted => {
                 self.scan_state = ScanState::Scanning;
                 self.drives.clear();
@@ -803,6 +862,7 @@ impl eframe::App for App {
         ui::settings_panel::show(ui, self);
         ui::log_panel::show(ui, self);
         ui::details_panel::show(ui, self);
+        ui::about::show(ui, self);
     }
 
     /// Stap 8: instellingen persistent opslaan (eframe schrijft dit weg naar

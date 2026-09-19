@@ -307,6 +307,10 @@ pub enum Event {
     MediaEjected {
         index: usize,
     },
+    /// libisofs-versie na de laadpoging (lege string = niet geladen).
+    IsofsLoaded {
+        version: String,
+    },
     WorkerStopped,
 }
 
@@ -2876,12 +2880,16 @@ fn load_isofs(lang: Lang, notify: &Notifier) -> Option<RawLibisofs> {
                 (iso.version)(&mut maj, &mut min, &mut mic);
                 let version = format!("{maj}.{min}.{mic}");
                 notify.log(Level::Success, lang.w_isofs_loaded(&version, cand));
+                notify.send(Event::IsofsLoaded { version });
                 return Some(iso);
             },
             Err(e) => last_err = format!("`{cand}`: {e}"),
         }
     }
     notify.log(Level::Warning, lang.w_isofs_unavailable_warn(&last_err));
+    notify.send(Event::IsofsLoaded {
+        version: String::new(),
+    });
     None
 }
 

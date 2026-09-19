@@ -10,7 +10,7 @@ where libburn is not (yet) installed, and then explains what is needed.
 
 ## Requirements
 
-- Rust 1.85+ (edition 2024; ontwikkeld en getest met 1.96)
+- Rust 1.85+ (edition 2024; developed and tested with 1.96)
 - libburn runtime on the system, e.g. on Debian/Ubuntu:
 
   ```sh
@@ -56,6 +56,10 @@ cargo build --release
 - Multiple drives in parallel with per-drive progress, LED and cancel
 - Session log file for troubleshooting (`~/.local/share/burnr/logs/`)
 - Persistent settings (eframe persistence)
+- Interface in **en-US** (default), **nl-NL** or **de-DE** — switch in the
+  top bar; the log follows the language as well
+- Color themes **Dark / Soft / Light / High contrast**; accent-coloured
+  primary actions; about box with the runtime library versions and license
 
 ## Known limitations
 
@@ -90,9 +94,12 @@ cargo build --release
 | `src/worker.rs` | background worker that runs all libburn calls on one thread |
 | `src/logger.rs` | feedback log with levels and timestamps |
 | `src/settings.rs` | user settings (passed to libburn in the burn step) |
-| `src/ui/` | panels: top bar, drives, details, settings, log |
+| `src/i18n.rs` | typed text catalogue: `Lang` enum + per-language `Texts` + worker log methods (en-US / nl-NL / de-DE) |
+| `src/ui/` | panels: top bar, drives, details, settings, log, about |
 | `assets/` | window icon: `icon.png` (embedded in the binary, loaded in `main.rs`) and `icon.svg` (source for the future .deb installation) |
+| `QUICKSTART.md` | short getting-started guide (one page) |
 | `docs/libburn.h` | reference header (libburn 1.5.6) from which the FFI layout was derived |
+| `docs/i18n-glossary.md` | terminology and translation conventions for the catalogue |
 
 ## Roadmap
 
@@ -194,14 +201,25 @@ cargo build --release
     advanced collapsible section with positive toggle switches (defect
     management / certification), because formatting optical media is
     drive-dependent and is only needed as a rescue action.
-- [ ] **Step 10b — Next thread**: i18n (typed text catalogue + language
-  choice, en-US source language, nl-NL/de-DE translations — the existing
-  Dutch texts are the source for the nl-NL entries, see
-  `docs/i18n-glossary.md`), rudimentary in-app help/info and README fully
-  in en-US, then the .deb package (Depends: libburn4, libisofs6 —
-  libisoburn1 not needed; check the t64 suffix on Debian trixie). The
-  .desktop file must be named exactly `burnr.desktop` to match the
-  Wayland app id.
+- [x] **Step 10b — i18n, themes & polish**: typed text catalogue
+  (`src/i18n.rs`: `Lang` enum, per-language `Texts` struct for all panels,
+  per-message methods for the worker log — en-US source, nl-NL carried over
+  1:1, de-DE translated; terminology in `docs/i18n-glossary.md`), language
+  switch in the top bar (en-US default), the worker receives the language
+  so all log lines follow, `LogFilter` newtype replacing the magic indices,
+  color themes Dark / Soft / Light / High contrast, accent-coloured primary
+  actions, about box with the runtime library versions, media-aware eject
+  settle pause (2000 ms for overwritable media — drives silently ignore an
+  eject during background formatting), a "General" settings group (padding,
+  timestamps, eject), quickstart guide (`QUICKSTART.md`), README fully in
+  en-US, `rust-version` pinned, clippy-clean, and the license
+  (GPL-3.0-or-later, see `LICENSE`).
+- [ ] **Step 10c — Next thread**: the .deb package (Depends: libburn4,
+  libisofs6 — libisoburn1 not needed; check the t64 suffix on Debian
+  trixie; the .desktop file must be named exactly `burnr.desktop` to match
+  the Wayland app id) and the RAII hardening pass: RAII wrappers around the
+  libburn FFI handles (grab/release, disc/session/track/source),
+  de-duplication of the two burn flows and a shutdown-during-job test.
 
 ## Tests
 
@@ -213,3 +231,8 @@ The smoke tests load the real system library and check
 `burn_initialize`/`burn_version` and the full scan flow (including the
 struct layout of `burn_drive_info`). Without libburn on the system they
 quietly skip.
+
+## License
+
+GNU General Public License version 3 **or later** — see [LICENSE](LICENSE).
+(`QUICKSTART.md` has a one-page getting-started guide.)

@@ -241,7 +241,7 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
                 ui.label(t.media.inspecting);
             } else {
                 if ui
-                    .add_enabled(scan_ready, egui::Button::new(t.media.inspect_btn))
+                    .add_enabled(scan_ready, crate::ui::primary_button(t.media.inspect_btn))
                     .clicked()
                 {
                     app.request_inspect(d.index);
@@ -464,7 +464,7 @@ fn read_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
         }
         let ready = app.scan_state == ScanState::Done && app.busy_drive.is_none();
         if ui
-            .add_enabled(ready, egui::Button::new(t.image.make_copy_btn))
+            .add_enabled(ready, crate::ui::primary_button(t.image.make_copy_btn))
             .clicked()
         {
             let path = app.read_path.clone();
@@ -644,7 +644,7 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
                     }
                 }
                 if ui
-                    .add_enabled(ready, egui::Button::new(t.burn.burn_btn))
+                    .add_enabled(ready, crate::ui::primary_button(t.burn.burn_btn))
                     .clicked()
                 {
                     let path = app.burn_path.clone();
@@ -700,7 +700,7 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
                 if ui
                     .add_enabled(
                         ready && !app.burn_files.is_empty(),
-                        egui::Button::new(t.burn.compose_burn_btn),
+                        crate::ui::primary_button(t.burn.compose_burn_btn),
                     )
                     .clicked()
                 {

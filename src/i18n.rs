@@ -18,13 +18,14 @@ use crate::worker::MaintKind;
 use serde::{Deserialize, Serialize};
 
 /// Interfacetaal. De serde-namen volgen de locale-conventie zodat het
-/// opslagbestand leesbaar blijft.
+/// opslagbestand leesbaar blijft. en-US is de brontaal én de default; een
+/// eenmalig opgeslagen voorkeur wint altijd van de default.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 pub enum Lang {
+    #[default]
     #[serde(rename = "en-US")]
     EnUs,
-    /// Default zolang de migratie loopt: de bestaande UI-teksten zijn Nederlands.
-    #[default]
+    #[serde(rename = "nl-NL")]
     NlNl,
     #[serde(rename = "de-DE")]
     DeDe,
@@ -68,7 +69,19 @@ pub struct Texts {
     pub image: DiscImageTexts,
     pub maint: MaintTexts,
     pub app_log: AppLogTexts,
+    pub about: AboutTexts,
     // Groeit mee met de migratie: logmeldingen (worker), help.
+}
+
+/// About-box (ℹ in de top bar).
+pub struct AboutTexts {
+    pub title: &'static str,
+    pub close: &'static str,
+    pub lib_failed: &'static str,
+    pub isofs_missing: &'static str,
+    pub runtime_note: &'static str,
+    /// Label "Licentie" vóór de (taalneutrale) GPL-regel.
+    pub license_label: &'static str,
 }
 
 /// Gedeelde teksten over meerdere panels heen.
@@ -289,6 +302,10 @@ pub struct TopBarTexts {
     pub scanning: &'static str,
     /// Scan-knop.
     pub scan: &'static str,
+    /// Hover bij de thema-keuzelijst.
+    pub theme_hover: &'static str,
+    /// Hover bij het ℹ-knopje.
+    pub about_hover: &'static str,
 }
 
 /// Logpaneel.
@@ -548,6 +565,8 @@ const EN_US: Texts = Texts {
         not_loaded: "libburn not loaded",
         scanning: "⏳ Scanning…",
         scan: "🔄 Scan",
+        theme_hover: "Color theme",
+        about_hover: "About Burnr",
     },
     log: LogTexts {
         title: "Log",
@@ -805,6 +824,14 @@ const EN_US: Texts = Texts {
         reinspect_after_maint: "Automatic re-inspection after maintenance…",
         media_cleared_after_eject: "Media info cleared after eject",
     },
+    about: AboutTexts {
+        title: "About Burnr",
+        close: "Close",
+        lib_failed: "libburn not loaded",
+        isofs_missing: "libisofs not loaded (compose files unavailable)",
+        runtime_note: "Runtime-loaded from the system; not compiled in.",
+        license_label: "License",
+    },
 };
 
 /// nl-NL: de oorspronkelijke UI-teksten 1-op-1 overgenomen (glossary:
@@ -815,6 +842,8 @@ const NL_NL: Texts = Texts {
         not_loaded: "libburn niet geladen",
         scanning: "⏳ Scannen…",
         scan: "🔄 Scannen",
+        theme_hover: "Kleurthema",
+        about_hover: "Over Burnr",
     },
     log: LogTexts {
         title: "Log",
@@ -1072,6 +1101,14 @@ const NL_NL: Texts = Texts {
         reinspect_after_maint: "Automatische herinspectie na onderhoud…",
         media_cleared_after_eject: "Mediagegevens gewist na eject",
     },
+    about: AboutTexts {
+        title: "Over Burnr",
+        close: "Sluiten",
+        lib_failed: "libburn niet geladen",
+        isofs_missing: "libisofs niet geladen (bestanden samenstellen niet beschikbaar)",
+        runtime_note: "Tijdens runtime van het systeem geladen; niet meegecompileerd.",
+        license_label: "Licentie",
+    },
 };
 
 /// de-DE: eerste vertaling; technische termen (grab, NWA, FIFO, TOC, MMC)
@@ -1082,6 +1119,8 @@ const DE_DE: Texts = Texts {
         not_loaded: "libburn nicht geladen",
         scanning: "⏳ Scannen…",
         scan: "🔄 Scannen",
+        theme_hover: "Farbthema",
+        about_hover: "Über Burnr",
     },
     log: LogTexts {
         title: "Log",
@@ -1338,6 +1377,14 @@ const DE_DE: Texts = Texts {
         files_cleared: "Dateiliste nach erfolgreichem Brennen geleert",
         reinspect_after_maint: "Automatische Neuinspektion nach Wartung…",
         media_cleared_after_eject: "Medieninformationen nach Auswurf gelöscht",
+    },
+    about: AboutTexts {
+        title: "Über Burnr",
+        close: "Schließen",
+        lib_failed: "libburn nicht geladen",
+        isofs_missing: "libisofs nicht geladen (Dateien zusammenstellen nicht verfügbar)",
+        runtime_note: "Zur Laufzeit vom System geladen; nicht einkompiliert.",
+        license_label: "Lizenz",
     },
 };
 

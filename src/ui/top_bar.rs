@@ -60,6 +60,30 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                 if want != app.lang {
                     app.set_language(want);
                 }
+
+                // Kleurthema (stap 10b-8); namen zijn taalneutraal.
+                let mut want_theme = app.theme;
+                let theme_resp = egui::ComboBox::from_id_salt("theme_choice")
+                    .selected_text(app.theme.label())
+                    .width(80.0)
+                    .show_ui(ui, |ui| {
+                        for th in crate::app::Theme::ALL {
+                            ui.selectable_value(&mut want_theme, th, th.label());
+                        }
+                    });
+                theme_resp.response.on_hover_text(t.top_bar.theme_hover);
+                if want_theme != app.theme {
+                    app.set_theme(ui.ctx(), want_theme);
+                }
+
+                // About-box.
+                if ui
+                    .small_button("ℹ")
+                    .on_hover_text(t.top_bar.about_hover)
+                    .clicked()
+                {
+                    app.show_about = true;
+                }
             });
         });
         ui.add_space(4.0);
