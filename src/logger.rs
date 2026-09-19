@@ -2,7 +2,6 @@
 //! plus een automatisch sessielogbestand voor foutopsporing (stap 9a).
 
 use chrono::Local;
-use egui::Color32;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::Write;
@@ -27,21 +26,14 @@ impl Level {
         self as usize
     }
 
+    /// Kolomtag per niveau (schermlog: via de i18n-catalogus; sessielog:
+    /// deze methode, taalonafhankelijk).
     pub fn tag(self) -> &'static str {
         match self {
             Level::Info => "INFO",
             Level::Success => "OK  ",
             Level::Warning => "WARN",
             Level::Error => "FOUT",
-        }
-    }
-
-    pub fn color(self) -> Color32 {
-        match self {
-            Level::Info => Color32::from_rgb(140, 158, 178),
-            Level::Success => Color32::from_rgb(108, 200, 128),
-            Level::Warning => Color32::from_rgb(232, 182, 92),
-            Level::Error => Color32::from_rgb(238, 112, 112),
         }
     }
 }

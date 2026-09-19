@@ -7,6 +7,7 @@ use crate::ui::colors;
 
 pub fn show(ui: &mut egui::Ui, app: &mut App) {
     let t = app.lang.texts();
+    let c = colors::palette(ui.ctx());
     egui::Panel::right("settings_panel")
         .default_size(310.0)
         .resizable(true)
@@ -24,7 +25,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                 ui.label(
                     egui::RichText::new(t.settings.apply_hint)
                         .small()
-                        .color(colors::DIM),
+                        .color(c.dim),
                 );
             });
         });
@@ -41,6 +42,7 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App) {
         .is_none_or(|m| !crate::worker::profile_is_overwritable(m.profile_no));
 
     let t = app.lang.texts();
+    let c = colors::palette(ui.ctx());
     egui::CollapsingHeader::new(egui::RichText::new(t.settings.burn_header).strong())
         .default_open(true)
         .show(ui, |ui| {
@@ -76,7 +78,7 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App) {
                     ui.label(
                         egui::RichText::new(t.settings.ms_not_applicable)
                             .small()
-                            .color(colors::DIM),
+                            .color(c.dim),
                     );
                 }
             });

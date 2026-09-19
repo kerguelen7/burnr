@@ -40,8 +40,9 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
 
 fn lib_failed_card(ui: &mut egui::Ui, app: &mut App, error: &str) {
     let t = app.lang.texts();
+    let c = colors::palette(ui.ctx());
     ui.group(|ui| {
-        ui.colored_label(colors::BAD, t.details.lib_failed_title);
+        ui.colored_label(c.bad, t.details.lib_failed_title);
         ui.weak(error);
         ui.separator();
         ui.label(t.details.lib_failed_body);
@@ -67,6 +68,7 @@ fn lib_failed_card(ui: &mut egui::Ui, app: &mut App, error: &str) {
 
 fn drive_details(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
     let t = app.lang.texts();
+    let c = colors::palette(ui.ctx());
     // Compacte kop: naam + apparaatpad; technische details zijn inklapbaar.
     ui.horizontal(|ui| {
         ui.heading(format!("📀 {}", d.display_name(t.drives.unnamed_prefix)));
@@ -78,7 +80,7 @@ fn drive_details(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry
                     d.adr.clone()
                 })
                 .small()
-                .color(colors::DIM),
+                .color(c.dim),
             );
         });
     });
@@ -131,7 +133,7 @@ fn drive_details(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry
             let has_profile =
                 |codes: &[i32]| d.supported_profiles.iter().any(|p| codes.contains(p));
             ui.horizontal_wrapped(|ui| {
-                ui.label(egui::RichText::new(t.details.caps_read).color(colors::DIM));
+                ui.label(egui::RichText::new(t.details.caps_read).color(c.dim));
                 for (name, ok) in [
                     ("CD-R", d.caps.read_cdr),
                     ("CD-RW", d.caps.read_cdrw),
@@ -145,7 +147,7 @@ fn drive_details(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry
                 }
             });
             ui.horizontal_wrapped(|ui| {
-                ui.label(egui::RichText::new(t.details.caps_write).color(colors::DIM));
+                ui.label(egui::RichText::new(t.details.caps_write).color(c.dim));
                 for (name, ok) in [
                     ("CD-R", d.caps.write_cdr),
                     ("CD-RW", d.caps.write_cdrw),
@@ -186,10 +188,11 @@ fn drive_details(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry
 }
 
 fn chip(ui: &mut egui::Ui, name: &str, ok: bool) {
+    let c = colors::palette(ui.ctx());
     let text = if ok {
-        egui::RichText::new(format!("✓ {name}")).color(colors::OK)
+        egui::RichText::new(format!("✓ {name}")).color(c.ok)
     } else {
-        egui::RichText::new(format!("✗ {name}")).color(colors::DIM)
+        egui::RichText::new(format!("✗ {name}")).color(c.dim)
     };
     ui.label(text);
 }
@@ -198,11 +201,12 @@ fn chip(ui: &mut egui::Ui, name: &str, ok: bool) {
 /// grijs = inactief.
 fn led(ui: &mut egui::Ui, state: crate::app::JobLed, t: &CommonTexts) {
     use crate::app::JobLed;
+    let c = colors::palette(ui.ctx());
     let (color, tip) = match state {
-        JobLed::Idle => (colors::DIM, t.led_idle),
-        JobLed::Busy => (colors::WARN, t.led_busy),
-        JobLed::Ok => (colors::OK, t.led_ok),
-        JobLed::Error => (colors::BAD, t.led_error),
+        JobLed::Idle => (c.dim, t.led_idle),
+        JobLed::Busy => (c.warn, t.led_busy),
+        JobLed::Ok => (c.ok, t.led_ok),
+        JobLed::Error => (c.bad, t.led_error),
     };
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(11.0, 11.0), egui::Sense::hover());
     ui.painter().circle_filled(rect.center(), 5.0, color);
@@ -224,6 +228,7 @@ fn fmt_dur(secs: f64) -> String {
 
 fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
     let t = app.lang.texts();
+    let c = colors::palette(ui.ctx());
     ui.group(|ui| {
         ui.label(egui::RichText::new(t.media.title).strong());
         ui.separator();
@@ -232,7 +237,7 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
         let scan_ready = app.scan_state == ScanState::Done;
 
         if let Some(err) = &d.inspect_error {
-            ui.colored_label(colors::BAD, format!("⚠ {err}"));
+            ui.colored_label(c.bad, format!("⚠ {err}"));
         }
 
         ui.horizontal(|ui| {
@@ -241,7 +246,10 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
                 ui.label(t.media.inspecting);
             } else {
                 if ui
-                    .add_enabled(scan_ready, crate::ui::primary_button(t.media.inspect_btn))
+                    .add_enabled(
+                        scan_ready,
+                        crate::ui::primary_button(&c, t.media.inspect_btn),
+                    )
                     .clicked()
                 {
                     app.request_inspect(d.index);
@@ -254,12 +262,12 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
 
         if let Some(media) = &d.media {
             let disc_color = match media.disc_status {
-                DiscStatus::Blank => colors::OK,
-                DiscStatus::Empty => colors::DIM,
-                DiscStatus::Appendable => colors::WARN,
-                DiscStatus::Full => colors::ACCENT,
-                DiscStatus::Unsuitable => colors::BAD,
-                _ => colors::DIM,
+                DiscStatus::Blank => c.ok,
+                DiscStatus::Empty => c.dim,
+                DiscStatus::Appendable => c.warn,
+                DiscStatus::Full => c.accent,
+                DiscStatus::Unsuitable => c.bad,
+                _ => c.dim,
             };
             ui.colored_label(
                 disc_color,
@@ -421,6 +429,7 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
 /// Schijfkopie-sectie: pad + startknop, of voortgang + annuleren tijdens het lezen.
 fn read_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
     let t = app.lang.texts();
+    let c = colors::palette(ui.ctx());
     if let Some(r) = app.active_read.clone() {
         if r.index == d.index {
             ui.add(egui::ProgressBar::new(r.fraction()).show_percentage());
@@ -464,7 +473,7 @@ fn read_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
         }
         let ready = app.scan_state == ScanState::Done && app.busy_drive.is_none();
         if ui
-            .add_enabled(ready, crate::ui::primary_button(t.image.make_copy_btn))
+            .add_enabled(ready, crate::ui::primary_button(&c, t.image.make_copy_btn))
             .clicked()
         {
             let path = app.read_path.clone();
@@ -480,6 +489,7 @@ fn read_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
 fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
     use crate::app::BurnSourceKind;
     let t = app.lang.texts();
+    let c = colors::palette(ui.ctx());
 
     if let Some(b) = app
         .active_burns
@@ -494,7 +504,7 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
             // met lead-out/track-afsluiting; de fase maakt dat zichtbaar.
             if frac >= 1.0 {
                 ui.colored_label(
-                    colors::WARN,
+                    c.warn,
                     format!(
                         "{} {}…",
                         t.burn.done_phase_prefix,
@@ -516,7 +526,7 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
                 ui.label(
                     egui::RichText::new(format!("{:.0} kB/s", b.kbps))
                         .strong()
-                        .color(colors::ORANGE),
+                        .color(c.orange),
                 );
                 ui.label(format!("{} {:.0}%", t.burn.buffer_word, b.buffer_pct));
                 ui.label(format!("fifo {:.0}%", b.fifo_pct));
@@ -535,7 +545,7 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
                 }
             });
             if b.simulate {
-                ui.colored_label(colors::WARN, t.burn.simulate_banner);
+                ui.colored_label(c.warn, t.burn.simulate_banner);
             }
         } else {
             ui.weak(t.burn.other_drive_burn);
@@ -644,7 +654,7 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
                     }
                 }
                 if ui
-                    .add_enabled(ready, crate::ui::primary_button(t.burn.burn_btn))
+                    .add_enabled(ready, crate::ui::primary_button(&c, t.burn.burn_btn))
                     .clicked()
                 {
                     let path = app.burn_path.clone();
@@ -700,7 +710,7 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
                 if ui
                     .add_enabled(
                         ready && !app.burn_files.is_empty(),
-                        crate::ui::primary_button(t.burn.compose_burn_btn),
+                        crate::ui::primary_button(&c, t.burn.compose_burn_btn),
                     )
                     .clicked()
                 {
@@ -714,7 +724,7 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
                 .as_ref()
                 .is_some_and(|m| m.disc_status == DiscStatus::Appendable)
             {
-                ui.colored_label(colors::OK, t.burn.ms_import_hint);
+                ui.colored_label(c.ok, t.burn.ms_import_hint);
             }
         }
     }
@@ -727,7 +737,7 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
         .as_ref()
         .is_some_and(|m| crate::worker::profile_cant_simulate(m.profile_no));
     if app.settings.simulate && (!d.caps.write_simulate || media_cant_simulate) {
-        ui.colored_label(colors::WARN, t.burn.simulate_warn);
+        ui.colored_label(c.warn, t.burn.simulate_warn);
     }
     ui.weak(t.burn.uses_settings_hint);
 }
@@ -842,6 +852,7 @@ fn maint_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry
 
 /// TOC-weergave: per sessie de tracks met type, startadres en grootte.
 fn toc_section(ui: &mut egui::Ui, media: &crate::worker::MediaInfo, t: &MediaTexts) {
+    let c = colors::palette(ui.ctx());
     if media.sessions.is_empty() {
         match media.disc_status {
             DiscStatus::Empty => {}
@@ -912,7 +923,7 @@ fn toc_section(ui: &mut egui::Ui, media: &crate::worker::MediaInfo, t: &MediaTex
                                 s.end_lba.saturating_sub(1)
                             ))
                             .small()
-                            .color(colors::DIM),
+                            .color(c.dim),
                         );
                         ui.end_row();
                     }
@@ -925,7 +936,7 @@ fn toc_section(ui: &mut egui::Ui, media: &crate::worker::MediaInfo, t: &MediaTex
                         media.incomplete_sessions, t.toc_incomplete
                     ))
                     .small()
-                    .color(colors::WARN),
+                    .color(c.warn),
                 );
             }
         });

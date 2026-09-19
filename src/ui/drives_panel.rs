@@ -5,6 +5,7 @@ use crate::ui::colors;
 
 pub fn show(ui: &mut egui::Ui, app: &mut App) {
     let t = app.lang.texts();
+    let c = colors::palette(ui.ctx());
     egui::Panel::left("drives_panel")
         .default_size(280.0)
         .resizable(true)
@@ -27,10 +28,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                     });
                 }
                 ScanState::Failed { error } => {
-                    ui.colored_label(
-                        colors::BAD,
-                        format!("{}: {error}", t.drives.scan_failed_prefix),
-                    );
+                    ui.colored_label(c.bad, format!("{}: {error}", t.drives.scan_failed_prefix));
                 }
                 _ => {}
             }
@@ -42,7 +40,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                             // Een eerdere scan vond wél een station — dus de
                             // drive bestaat en wordt nu geblokkeerd: de
                             // automount-hint is dan bewijsbaar juist.
-                            ui.colored_label(colors::WARN, t.drives.hint_automount);
+                            ui.colored_label(c.warn, t.drives.hint_automount);
                         } else if app.exclusive_open {
                             ui.weak(t.drives.hint_none_exclusive);
                         } else {
@@ -62,11 +60,11 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                     let inspected = d.media.is_some();
 
                     let dot = if inspecting {
-                        colors::WARN
+                        c.warn
                     } else if inspected {
-                        colors::OK
+                        c.ok
                     } else {
-                        colors::DIM
+                        c.dim
                     };
 
                     let title = d.display_name(t.drives.unnamed_prefix);

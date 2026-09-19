@@ -7,6 +7,7 @@ use crate::ui::colors;
 
 pub fn show(ui: &mut egui::Ui, app: &mut App) {
     let t = app.lang.texts();
+    let c = colors::palette(ui.ctx());
     egui::Panel::bottom("log_panel")
         .default_size(190.0)
         .resizable(true)
@@ -66,7 +67,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                 ui.label(
                     egui::RichText::new(format!("{}: {}", t.log.session_log, p.display()))
                         .small()
-                        .color(colors::DIM),
+                        .color(c.dim),
                 );
             }
 
@@ -78,11 +79,11 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                             continue;
                         }
                         ui.horizontal_wrapped(|ui| {
-                            ui.monospace(egui::RichText::new(&e.time).small().color(colors::DIM));
+                            ui.monospace(egui::RichText::new(&e.time).small().color(c.dim));
                             ui.monospace(
                                 egui::RichText::new(t.log.level_tag(e.level))
                                     .small()
-                                    .color(e.level.color()),
+                                    .color(c.level(e.level)),
                             );
                             ui.label(egui::RichText::new(&e.msg).small());
                         });

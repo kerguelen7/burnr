@@ -9,6 +9,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
         return;
     }
     let t = app.lang.texts();
+    let c = colors::palette(ui.ctx());
     let modal = egui::Modal::new(egui::Id::new("about_modal")).show(ui.ctx(), |ui| {
         ui.set_min_width(360.0);
         ui.horizontal(|ui| {
@@ -34,7 +35,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                 ui.weak(t.details.loading);
             }
             LibState::Failed { .. } => {
-                ui.colored_label(colors::BAD, t.about.lib_failed);
+                ui.colored_label(c.bad, t.about.lib_failed);
             }
         }
         match &app.isofs_version {

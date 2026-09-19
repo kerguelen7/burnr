@@ -6,6 +6,7 @@ use crate::ui::colors;
 
 pub fn show(ui: &mut egui::Ui, app: &mut App) {
     let t = app.lang.texts();
+    let c = colors::palette(ui.ctx());
     egui::Panel::top("top_bar").show(ui, |ui| {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
@@ -22,11 +23,11 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                     ui.weak(t.top_bar.loading);
                 }
                 LibState::Loaded { version, path } => {
-                    ui.colored_label(colors::OK, format!("● libburn {version}"));
+                    ui.colored_label(c.ok, format!("● libburn {version}"));
                     ui.weak(format!("({path})"));
                 }
                 LibState::Failed { .. } => {
-                    ui.colored_label(colors::BAD, format!("● {}", t.top_bar.not_loaded));
+                    ui.colored_label(c.bad, format!("● {}", t.top_bar.not_loaded));
                 }
             }
 
