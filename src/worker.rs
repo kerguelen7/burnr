@@ -2028,8 +2028,24 @@ unsafe fn finalize_job(st: &WorkerState, job: &mut ActiveJob, notify: &Notifier)
                     // schijf wordt door de kernel geweigerd (EBUSY) — eerst
                     // unmounten, dan opnieuw grabben voor het eject-verzoek.
                     if wj.s.eject_after {
+                        // Media-profiel bepalen zolang de drive nog gegrabbed
+                        // is: overschrijfbare media (BD-RE, DVD+RW, DVD-RAM)
+                        // doet na de brand nog achtergrondwerk; een eject
+                        // daar middenin negeren drives stilzwijend.
+                        let mut profile_no: c_int = 0;
+                        let mut pname = [0 as c_char; 80];
+                        let _ = (st.raw.disc_get_profile)(
+                            job.drive,
+                            &mut profile_no,
+                            pname.as_mut_ptr(),
+                        );
+                        let overwritable = profile_is_overwritable(profile_no);
+                        let settle_ms: u64 = if overwritable { 2000 } else { 300 };
                         (st.raw.drive_release)(job.drive, 0);
-                        thread::sleep(Duration::from_millis(300));
+                        if overwritable {
+                            notify.log(Level::Info, st.lang.w_eject_settle(settle_ms));
+                        }
+                        thread::sleep(Duration::from_millis(settle_ms));
                         if is_dev_mounted(&job.adr) {
                             notify.log(Level::Info, st.lang.w_eject_mounted(&job.adr));
                             try_unmount(&job.adr, st.lang, notify);

@@ -2380,6 +2380,23 @@ impl Lang {
         }
     }
 
+    /// Settle-pauze vóór de eject: de drive krijgt tijd om interne taken
+    /// (cache-sync, achtergrondformatting) af te ronden; een eject te midden
+    /// daarvan wordt door de firmware stilzwijend genegeerd.
+    pub fn w_eject_settle(self, ms: u64) -> String {
+        match self {
+            Lang::EnUs => format!(
+                "Giving the drive {ms} ms to finish internal tasks (e.g. background formatting) before ejecting…"
+            ),
+            Lang::NlNl => format!(
+                "De drive krijgt {ms} ms om interne taken af te ronden (bijv. achtergrondformatting) vóór de eject…"
+            ),
+            Lang::DeDe => format!(
+                "Das Laufwerk erhält {ms} ms Zeit für interne Aufgaben (z. B. Hintergrundformatierung), bevor ausgeworfen wird…"
+            ),
+        }
+    }
+
     pub fn w_drive_released(self) -> String {
         match self {
             Lang::EnUs => "Drive released".to_string(),
