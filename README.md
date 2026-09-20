@@ -99,6 +99,13 @@ so it also installs on older releases:
 - **Multi-session** applies to write-once media only; overwritable media
   (DVD+RW, BD-RE, DVD-RAM, formatted DVD-RW) is always writable, so the
   setting is disabled for it.
+- **Book type on BD** is meaningless: libburn decodes the BD Disc
+  Information nibble with the DVD book-type table (MMC-5 table 401), which
+  produces nonsense such as "HD DVD-ROM book [revision 4]" on BD-R/BD-RE.
+  On BD the media kind is identified by the Disc Type Identifier field
+  (BDO/BDR/BDW), not by that nibble. The GUI therefore shows the book type
+  only for DVD media (a dash on BD); the media code is read from the
+  proper DI fields and is unaffected.
 
 ## Structure
 

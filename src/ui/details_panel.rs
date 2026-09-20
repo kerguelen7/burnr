@@ -323,6 +323,13 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
                 .media_id
                 .as_ref()
                 .and_then(|mid| mid.book_type.clone())
+                // "Book type" is een DVD-concept (MMC-5 tabel 401). libburn
+                // decodeert de DI-nibble bij BD met diezelfde DVD-tabel en
+                // produceert daar onzinnige tekst (bijv. "HD DVD-ROM book")
+                // — bij BD wordt het mediatype bepaald door het Disc Type
+                // Identifier-veld (BDO/BDR/BDW), niet door deze nibble.
+                // Dus alleen bij DVD-profielen tonen.
+                .filter(|_| !matches!(media.profile_no, 0x40..=0x43))
                 .unwrap_or_else(|| "—".to_string());
             let capacity_val = match media.read_capacity_blocks {
                 // Lege overbeschrijfbare media (DVD+RW, BD-RE, …): de drive
