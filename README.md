@@ -34,6 +34,20 @@ cargo build --release
 ./target/release/burnr
 ```
 
+## Packaging (Debian)
+
+```sh
+cargo deb                                                        # needs cargo-deb: cargo install cargo-deb --locked
+sudo apt install ./target/debian/burnr_0.1.0-1_amd64.deb         # uninstall: sudo apt remove burnr
+```
+
+The package installs `burnr` in `/usr/bin`, the menu entry
+(`/usr/share/applications/burnr.desktop` — the exact name matching the
+Wayland app id) and hicolor icons (SVG + 128/256 px). `Depends` uses the
+t64 package names of Debian trixie with the plain names as alternatives,
+so it also installs on older releases:
+`libc6, libburn4t64 | libburn4, libisofs6t64 | libisofs6`.
+
 ## Features
 
 - Drive scan and per-drive details (capabilities, block types, buffer)
@@ -100,7 +114,7 @@ cargo build --release
 | `src/settings.rs` | user settings (passed to libburn in the burn step) |
 | `src/i18n.rs` | typed text catalogue: `Lang` enum + per-language `Texts` + worker log methods (en-US / nl-NL / de-DE) |
 | `src/ui/` | panels: top bar, drives, details, settings, log, about |
-| `assets/` | window icon: `icon.png` (embedded in the binary, loaded in `main.rs`) and `icon.svg` (source for the future .deb installation) |
+| `assets/` | window icon: `icon.png` (embedded in the binary, loaded in `main.rs`), `icon.svg` + generated `icon-128.png` (hicolor icons), `burnr.desktop` (menu entry) and `copyright` (DEP-5) for the .deb |
 | `QUICKSTART.md` | short getting-started guide (one page) |
 | `docs/libburn.h` | reference header (libburn 1.5.6) from which the FFI layout was derived |
 | `docs/i18n-glossary.md` | terminology and translation conventions for the catalogue |
@@ -219,10 +233,8 @@ cargo build --release
   en-US, `rust-version` pinned, clippy-clean, and the license
   (GPL-3.0-or-later, see `LICENSE`).
 - [ ] **Step 10c — Next thread**: the RAII hardening pass is done (this
-  thread); the .deb package is next (Depends: libburn4, libisofs6 —
-  libisoburn1 not needed; check the t64 suffix on Debian trixie; the
-  .desktop file must be named exactly `burnr.desktop` to match the Wayland
-  app id).
+  thread), plus zoom controls and the .deb packaging (see below). The
+  GitHub publication of the project is next.
   - **RAII hardening (done)**: new `src/raii.rs` with ownership wrappers
     around every libburn/libisofs handle — `GrabbedDrive` (grab/release/
     regrab/eject), `OwnedDisc/Session/Track/Source/WriteOpts`, `SpeedList`,
@@ -254,6 +266,16 @@ cargo build --release
     language-neutral symbols; only the hover texts are in the catalogue
     (en/nl/de). The zoom factor is persisted in the settings file and
     restored (re-clamped) at startup.
+  - **.deb packaging (done)**: `cargo deb` (cargo-deb) builds
+    `target/debian/burnr_0.1.0-1_amd64.deb`: binary in `/usr/bin`,
+    `burnr.desktop` (exact name = Wayland app id, with en/nl/de comments,
+    `StartupWMClass=burnr`), hicolor icons (scalable SVG + 128/256 px) and
+    a DEP-5 copyright file. `Depends: libc6, libburn4t64 | libburn4,
+    libisofs6t64 | libisofs6` — the t64 names of trixie (also used on
+    amd64) with the plain names as alternatives for older releases. No
+    maintainer scripts needed: the hicolor icon cache updates via dpkg
+    triggers, and the desktop file needs no MimeType cache (no MIME
+    associations yet).
 
 ## Tests
 

@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Burnr
+GenericName=Disc burning
+GenericName[nl]=Schijven branden
+GenericName[de]=Optische Medien brennen
+Comment=Lightweight libburn GUI for CD, DVD and Blu-ray
+Comment[nl]=Lichte libburn-GUI voor CD, DVD en Blu-ray
+Comment[de]=Leichte libburn-GUI für CD, DVD und Blu-ray
+Exec=burnr
+Icon=burnr
+Terminal=false
+Categories=Utility;DiscBurning;
+Keywords=iso;burn;cd;dvd;blu-ray;bd-r;libburn;
+StartupWMClass=burnr

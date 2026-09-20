@@ -18,3 +18,29 @@ serde = { version = "1", features = ["derive"] }
 
 [profile.release]
 lto = "thin"
+
+# Debian-pakket (stap 10c): bouwen met `cargo deb` →
+# target/debian/burnr_<versie>-1_amd64.deb.
+# Depends met alternatieven: Debian trixie hanteert de t64-namen
+# (libburn4t64/libisofs6t64, ook op amd64), bookworm de gewone
+# (libburn4/libisofs6). libc6 wordt door cargo-deb automatisch met de
+# gedetecteerde minimumversie toegevoegd.
+[package.metadata.deb]
+maintainer = "kerguelen7 <kerguelen7@posteo.org>"
+copyright = "2026, kerguelen7 <kerguelen7@posteo.org>"
+depends = "libc6, libburn4t64 | libburn4, libisofs6t64 | libisofs6"
+section = "utils"
+priority = "optional"
+extended-description = """\
+A modern egui front-end for libburn — the CD/DVD/BD burning library.
+libburn and libisofs are not compiled in: at runtime the GUI loads the
+system shared objects (libburn.so.4, libisofs.so.6), so the package only
+depends on their runtime libraries."""
+assets = [
+    ["target/release/burnr", "usr/bin/", "755"],
+    ["assets/burnr.desktop", "usr/share/applications/", "644"],
+    ["assets/icon.svg", "usr/share/icons/hicolor/scalable/apps/burnr.svg", "644"],
+    ["assets/icon.png", "usr/share/icons/hicolor/256x256/apps/burnr.png", "644"],
+    ["assets/icon-128.png", "usr/share/icons/hicolor/128x128/apps/burnr.png", "644"],
+    ["assets/copyright", "usr/share/doc/burnr/copyright", "644"],
+]
