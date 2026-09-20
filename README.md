@@ -99,6 +99,14 @@ so it also installs on older releases:
 - **Multi-session** applies to write-once media only; overwritable media
   (DVD+RW, BD-RE, DVD-RAM, formatted DVD-RW) is always writable, so the
   setting is disabled for it.
+- **Disc image reading is a raw sector copy**: it copies the entire
+  readable capacity reported by the drive, not just the files. Formatted
+  rewritable media (BD-RE, DVD+RW, DVD-RAM) report their full formatted
+  capacity, so a 6 GB data set on a 22.56 GiB BD-RE yields a 22.56 GiB
+  image whose tail is zero-filled (compresses well). Write-once media
+  (BD-R, DVD±R) report up to the last written sector, so their images are
+  tighter. The GUI shows a hint in the disc image section when the
+  inserted media is overwritable.
 - **Book type on BD** is meaningless: libburn decodes the BD Disc
   Information nibble with the DVD book-type table (MMC-5 table 401), which
   produces nonsense such as "HD DVD-ROM book [revision 4]" on BD-R/BD-RE.

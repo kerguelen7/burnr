@@ -487,6 +487,9 @@ pub struct DiscImageTexts {
     pub island_header: &'static str,
     pub make_copy_btn: &'static str,
     pub copy_hint: &'static str,
+    /// Extra hint bij overbeschrijfbare media: de kopie beslaat de volledige
+    /// geformatteerde capaciteit, inclusief het niet-beschreven deel.
+    pub full_capacity_hint: &'static str,
     pub other_drive_read: &'static str,
     /// Suffix in "123 / 456 blokken".
     pub blocks_suffix: &'static str,
@@ -783,6 +786,7 @@ const EN_US: Texts = Texts {
         island_header: "💾 Disc image (data)",
         make_copy_btn: "💾 Make copy",
         copy_hint: "Reads all data blocks (2048 B) into one file — suitable for CD/DVD/BD data, not for CD audio.",
+        full_capacity_hint: "Formatted rewritable media (BD-RE, DVD+RW, DVD-RAM): the copy covers the entire formatted capacity, including the unwritten (zero-filled) area.",
         other_drive_read: "A copy is currently running on another drive.",
         blocks_suffix: "blocks",
         default_file: "copy.iso",
@@ -1063,6 +1067,7 @@ const NL_NL: Texts = Texts {
         island_header: "💾 Schijfkopie (data)",
         make_copy_btn: "💾 Kopie maken",
         copy_hint: "Leest alle datablokken (2048 B) naar één bestand — geschikt voor CD/DVD/BD-data, niet voor CD-audio.",
+        full_capacity_hint: "Geformatteerde herschrijfbare media (BD-RE, DVD+RW, DVD-RAM): de kopie beslaat de volledige geformatteerde capaciteit, inclusief het niet-beschreven (met nullen gevulde) deel.",
         other_drive_read: "Er draait momenteel een kopie op een ander station.",
         blocks_suffix: "blokken",
         default_file: "kopie.iso",
@@ -1343,6 +1348,7 @@ const DE_DE: Texts = Texts {
         island_header: "💾 Disc-Image (Daten)",
         make_copy_btn: "💾 Kopie erstellen",
         copy_hint: "Liest alle Datenblöcke (2048 B) in eine Datei — geeignet für CD/DVD/BD-Daten, nicht für CD-Audio.",
+        full_capacity_hint: "Formatierte wiederbeschreibbare Medien (BD-RE, DVD+RW, DVD-RAM): die Kopie umfasst die gesamte formatierte Kapazität, einschließlich des unbeschriebenen (mit Nullen gefüllten) Bereichs.",
         other_drive_read: "Auf einem anderen Laufwerk läuft gerade eine Kopie.",
         blocks_suffix: "Blöcke",
         default_file: "Kopie.iso",

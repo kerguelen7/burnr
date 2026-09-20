@@ -1,7 +1,7 @@
 //! Centraal paneel: details van het geselecteerde station + media-inspectie.
 
 use crate::app::{App, LibState, ScanState};
-use crate::ffi::DiscStatus;
+use crate::ffi::{DiscStatus, DriveStatus};
 use crate::i18n::{CommonTexts, MediaTexts};
 use crate::ui::colors;
 use crate::worker::{format_blocks, profile_fallback_name, speed_multiplier_label};
@@ -277,10 +277,28 @@ fn media_card(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry) {
                     t.media.disc_status_label(media.disc_status)
                 ),
             );
+            // Live-status: tijdens een job toont de kaart de actuele
+            // drive-fase in plaats van de verouderde waarde uit de laatste
+            // inspectie (die gewoon "inaktiv" blijft tijdens het branden).
+            let drive_status = if let Some(b) = app.active_burns.iter().find(|b| b.index == d.index)
+            {
+                b.phase
+            } else if let Some(m) = app.active_maints.iter().find(|m| m.index == d.index) {
+                match m.kind {
+                    crate::worker::MaintKind::Erase => DriveStatus::Erasing,
+                    crate::worker::MaintKind::Format => DriveStatus::Formatting,
+                }
+            } else if app.active_read.as_ref().is_some_and(|r| r.index == d.index) {
+                DriveStatus::Reading
+            } else if app.busy_drive == Some(d.index) {
+                DriveStatus::Grabbing
+            } else {
+                media.drive_status
+            };
             ui.weak(format!(
                 "{}: {}",
                 t.media.drive_prefix,
-                t.media.drive_status_label(media.drive_status)
+                t.media.drive_status_label(drive_status)
             ));
 
             // Compacte info in twee kolommen (label–waarde-paren naast elkaar).
@@ -488,6 +506,13 @@ fn read_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
         }
     });
     ui.weak(t.image.copy_hint);
+    // Overbeschrijfbare media melden de volledige geformatteerde capaciteit
+    // als leesbaar; de kopie bevat dus ook het niet-beschreven (nul-)deel.
+    if let Some(media) = &d.media {
+        if crate::worker::profile_is_overwritable(media.profile_no) {
+            ui.weak(t.image.full_capacity_hint);
+        }
+    }
 }
 
 /// Brand-sectie: ISO-pad + startknop, of voortgang + annuleren tijdens het branden.
