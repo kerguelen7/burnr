@@ -60,6 +60,9 @@ cargo build --release
   top bar; the log follows the language as well
 - Color themes **Dark / Soft / Light / High contrast**; accent-coloured
   primary actions; about box with the runtime library versions and license
+- Zoom controls in the top bar (`−` / percentage / `+`, language-neutral
+  symbols) doing the same as the Ctrl+ / Ctrl− / Ctrl+0 shortcuts; the
+  zoom level is remembered between sessions and limited to 80–160%
 
 ## Known limitations
 
@@ -242,6 +245,15 @@ cargo build --release
     `burn_finish()`/`dlclose` under it segfaulted. The scan abort path now
     drains the scan protocol until the thread reports done, frees the
     result array and settles briefly before shutdown.
+  - **Zoom controls (done)**: `−` / percentage / `+` buttons in the top bar
+    next to the theme picker. Buttons and the Ctrl+ / Ctrl− / Ctrl+0
+    shortcuts share one code path (`app::zoom_step`, step 0.1) with the
+    app's own limits of **80–160%** (egui's built-in shortcut handling is
+    disabled because its limits are 0.2–5.0). The percentage button resets
+    to 100% and doubles as a zoom indicator. Button labels are
+    language-neutral symbols; only the hover texts are in the catalogue
+    (en/nl/de). The zoom factor is persisted in the settings file and
+    restored (re-clamped) at startup.
 
 ## Tests
 

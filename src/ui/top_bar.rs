@@ -1,6 +1,6 @@
-//! Bovenbalk: titel, libburn-status, taalkeuze en de scan-knop.
+//! Bovenbalk: titel, libburn-status, taalkeuze, zoom, thema en de scan-knop.
 
-use crate::app::{App, LibState, ScanState};
+use crate::app::{App, LibState, MAX_ZOOM, MIN_ZOOM, ScanState, zoom_in, zoom_out};
 use crate::i18n::Lang;
 use crate::ui::colors;
 
@@ -75,6 +75,57 @@ pub fn show(ui: &mut egui::Ui, app: &mut App) {
                 theme_resp.response.on_hover_text(t.top_bar.theme_hover);
                 if want_theme != app.theme {
                     app.set_theme(ui.ctx(), want_theme);
+                }
+
+                // Zoomregeling (stap 10c): doet exact hetzelfde als de
+                // sneltoetsen Ctrl+ / Ctrl− / Ctrl+0 — beide lopen via
+                // app::zoom_step met de eigen grenzen (80–160%). De labels
+                // zijn symbolen + percentage, dus taalneutraal; alleen de
+                // hovers staan in de tekstcatalogus. De layout is
+                // right-to-left, dus visueel verschijnt het als − % +.
+                let zoom = ui.ctx().zoom_factor();
+                if ui
+                    .add_enabled(zoom < MAX_ZOOM, egui::Button::new("+"))
+                    .on_hover_text(format!(
+                        "{} ({})",
+                        t.top_bar.zoom_in_hover,
+                        ui.ctx()
+                            .format_shortcut(&egui::gui_zoom::kb_shortcuts::ZOOM_IN)
+                    ))
+                    .clicked()
+                {
+                    zoom_in(ui.ctx());
+                }
+                if ui
+                    .add_enabled(
+                        zoom != 1.0,
+                        // Normale tekstgrootte, zodat het percentage gelijk
+                        // loopt met de rest van de top bar; vaste breedte
+                        // tegen het verspringen van 100% → 110%.
+                        egui::Button::new(format!("{:.0}%", zoom * 100.0))
+                            .min_size(egui::vec2(52.0, 20.0)),
+                    )
+                    .on_hover_text(format!(
+                        "{} ({})",
+                        t.top_bar.zoom_reset_hover,
+                        ui.ctx()
+                            .format_shortcut(&egui::gui_zoom::kb_shortcuts::ZOOM_RESET)
+                    ))
+                    .clicked()
+                {
+                    ui.ctx().set_zoom_factor(1.0);
+                }
+                if ui
+                    .add_enabled(zoom > MIN_ZOOM, egui::Button::new("−"))
+                    .on_hover_text(format!(
+                        "{} ({})",
+                        t.top_bar.zoom_out_hover,
+                        ui.ctx()
+                            .format_shortcut(&egui::gui_zoom::kb_shortcuts::ZOOM_OUT)
+                    ))
+                    .clicked()
+                {
+                    zoom_out(ui.ctx());
                 }
 
                 // About-box.

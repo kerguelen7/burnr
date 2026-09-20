@@ -65,6 +65,50 @@ impl Theme {
     }
 }
 
+/// Grenzen van de UI-zoom (stap 10c): bewust krap gehouden (80–160%) zodat
+/// de interface bruikbaar blijft. Gelden voor de knoppen in de top bar én
+/// voor de sneltoetsen Ctrl+/Ctrl−/Ctrl+0 (egui's ruime standaardlimiet van
+/// 0,2–5,0 is daarom uitgezet; zie `handle_zoom_shortcuts`).
+pub const MIN_ZOOM: f32 = 0.8;
+pub const MAX_ZOOM: f32 = 1.6;
+
+/// UI-zoom met één stap aanpassen (0,1 per stap, afgerond zoals egui dat
+/// doet). De knoppen in de top bar en de sneltoetsen lopen hier beide
+/// doorheen, dus ze kunnen nooit buiten de grenzen.
+pub fn zoom_step(ctx: &egui::Context, step: f32) {
+    let zoom = (ctx.zoom_factor() + step).clamp(MIN_ZOOM, MAX_ZOOM);
+    ctx.set_zoom_factor((zoom * 10.).round() / 10.);
+}
+
+/// Zoom in (zoals Ctrl+).
+pub fn zoom_in(ctx: &egui::Context) {
+    zoom_step(ctx, 0.1);
+}
+
+/// Zoom uit (zoals Ctrl−).
+pub fn zoom_out(ctx: &egui::Context) {
+    zoom_step(ctx, -0.1);
+}
+
+/// De zoom-sneltoetsen zelf afhandelen, met de grenzen hierboven. egui's
+/// ingebouwde afhandeling (`zoom_with_keyboard`) is in `App::new` uitgezet
+/// omdat die de limieten 0,2–5,0 gebruikt.
+pub fn handle_zoom_shortcuts(ctx: &egui::Context) {
+    use egui::gui_zoom::kb_shortcuts;
+    if ctx.input_mut(|i| i.consume_shortcut(&kb_shortcuts::ZOOM_RESET)) {
+        ctx.set_zoom_factor(1.0);
+    } else {
+        if ctx.input_mut(|i| i.consume_shortcut(&kb_shortcuts::ZOOM_IN))
+            || ctx.input_mut(|i| i.consume_shortcut(&kb_shortcuts::ZOOM_IN_SECONDARY))
+        {
+            zoom_in(ctx);
+        }
+        if ctx.input_mut(|i| i.consume_shortcut(&kb_shortcuts::ZOOM_OUT)) {
+            zoom_out(ctx);
+        }
+    }
+}
+
 /// Status die tussen sessies bewaard wordt (stap 8, eframe-persistence).
 /// Velden zijn Option zodat oudere opslagbestanden zonder fouten laden.
 #[derive(serde::Serialize, serde::Deserialize, Default)]
@@ -77,6 +121,8 @@ pub struct PersistedState {
     pub log_filter: Option<[bool; 4]>,
     pub language: Option<Lang>,
     pub theme: Option<Theme>,
+    /// UI-zoomfactor (1.0 = 100%); Option zodat oudere opslagbestanden laden.
+    pub zoom: Option<f32>,
 }
 
 impl PersistedState {
@@ -90,6 +136,7 @@ impl PersistedState {
             log_filter: Some(app.log_filter.0),
             language: Some(app.lang),
             theme: Some(app.theme),
+            zoom: Some(app.zoom),
         }
     }
 }
@@ -208,6 +255,9 @@ pub struct App {
     pub lang: Lang,
     /// Kleurthema (stap 10b-8).
     pub theme: Theme,
+    /// UI-zoomfactor, elke frame gesynchroniseerd met egui (stap 10c);
+    /// de knoppen in de top bar en Ctrl+/Ctrl− doen hetzelfde.
+    pub zoom: f32,
     /// About-box open? (niet gepersisteerd)
     pub show_about: bool,
     /// libisofs-versie volgens de worker (None = niet geladen).
@@ -219,6 +269,9 @@ pub struct App {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         cc.egui_ctx.set_theme(egui::ThemePreference::Dark);
+        // Zoom-sneltoetsen zelf afhandelen met eigen grenzen (80–160%);
+        // egui's standaardafhandeling gebruikt 0,2–5,0 en staat daarom uit.
+        cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
         cc.egui_ctx.all_styles_mut(|style| {
             style.spacing.item_spacing = egui::vec2(8.0, 6.0);
             style.visuals.panel_fill = Color32::from_rgb(24, 26, 31);
@@ -271,6 +324,7 @@ impl App {
             auto_scroll: true,
             lang: Lang::default(),
             theme: Theme::default(),
+            zoom: 1.0,
             show_about: false,
             isofs_version: None,
             icon,
@@ -304,6 +358,15 @@ impl App {
                 }
                 if let Some(v) = p.theme {
                     app.theme = v;
+                }
+                if let Some(z) = p.zoom {
+                    // Opgeslagen zoom herstellen (de knoppen en Ctrl+/Ctrl−
+                    // schrijven via dezelfde egui-zoomfactor); begrensd voor
+                    // het geval een ouder/handmatig bewerkt opslagbestand
+                    // een extremere waarde bevat.
+                    let z = z.clamp(MIN_ZOOM, MAX_ZOOM);
+                    app.zoom = z;
+                    cc.egui_ctx.set_zoom_factor(z);
                 }
                 app.log
                     .push(Level::Info, app.lang.texts().app_log.settings_loaded);
@@ -856,6 +919,9 @@ impl eframe::App for App {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Zoom-sneltoetsen (Ctrl+/Ctrl−/Ctrl+0) met eigen grenzen afhandelen;
+        // egui's ingebouwde afhandeling is uitgezet (zie App::new).
+        handle_zoom_shortcuts(ui.ctx());
         // Volgorde is belangrijk: CentralPanel als laatste.
         ui::top_bar::show(ui, self);
         ui::drives_panel::show(ui, self);
@@ -863,6 +929,9 @@ impl eframe::App for App {
         ui::log_panel::show(ui, self);
         ui::details_panel::show(ui, self);
         ui::about::show(ui, self);
+        // Zoomfactor bijhouden voor de persistence (de knoppen in de top bar
+        // én de sneltoetsen Ctrl+/Ctrl− lopen via dezelfde egui-zoomfactor).
+        self.zoom = ui.ctx().zoom_factor();
     }
 
     /// Stap 8: instellingen persistent opslaan (eframe schrijft dit weg naar

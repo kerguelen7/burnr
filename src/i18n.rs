@@ -304,7 +304,13 @@ pub struct TopBarTexts {
     pub scan: &'static str,
     /// Hover bij de thema-keuzelijst.
     pub theme_hover: &'static str,
-    /// Hover bij het ℹ-knopje.
+    /// Hover bij de zoom-out-knop (−).
+    pub zoom_out_hover: &'static str,
+    /// Hover bij het percentage-knopje (reset naar 100%).
+    pub zoom_reset_hover: &'static str,
+    /// Hover bij de zoom-in-knop (+).
+    pub zoom_in_hover: &'static str,
+    /// Hover bij het ℹ-icoon (about).
     pub about_hover: &'static str,
 }
 
@@ -566,6 +572,9 @@ const EN_US: Texts = Texts {
         scanning: "⏳ Scanning…",
         scan: "🔄 Scan",
         theme_hover: "Color theme",
+        zoom_out_hover: "Zoom out",
+        zoom_reset_hover: "Reset zoom to 100%",
+        zoom_in_hover: "Zoom in",
         about_hover: "About Burnr",
     },
     log: LogTexts {
@@ -843,6 +852,9 @@ const NL_NL: Texts = Texts {
         scanning: "⏳ Scannen…",
         scan: "🔄 Scannen",
         theme_hover: "Kleurthema",
+        zoom_out_hover: "Verkleinen",
+        zoom_reset_hover: "Zoom terugzetten op 100%",
+        zoom_in_hover: "Vergroten",
         about_hover: "Over Burnr",
     },
     log: LogTexts {
@@ -1120,6 +1132,9 @@ const DE_DE: Texts = Texts {
         scanning: "⏳ Scannen…",
         scan: "🔄 Scannen",
         theme_hover: "Farbthema",
+        zoom_out_hover: "Verkleinern",
+        zoom_reset_hover: "Zoom auf 100 % zurücksetzen",
+        zoom_in_hover: "Vergrößern",
         about_hover: "Über Burnr",
     },
     log: LogTexts {
