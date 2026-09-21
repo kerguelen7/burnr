@@ -117,7 +117,6 @@ pub struct PersistedState {
     pub exclusive_open: Option<bool>,
     pub burn_source_kind: Option<BurnSourceKind>,
     pub burn_path: Option<String>,
-    pub read_path: Option<String>,
     pub log_filter: Option<[bool; 4]>,
     pub language: Option<Lang>,
     pub theme: Option<Theme>,
@@ -132,7 +131,6 @@ impl PersistedState {
             exclusive_open: Some(app.exclusive_open),
             burn_source_kind: Some(app.burn_source_kind),
             burn_path: Some(app.burn_path.clone()),
-            read_path: Some(app.read_path.clone()),
             log_filter: Some(app.log_filter.0),
             language: Some(app.lang),
             theme: Some(app.theme),
@@ -347,9 +345,9 @@ impl App {
                 if let Some(v) = p.burn_path {
                     app.burn_path = v;
                 }
-                if let Some(v) = p.read_path {
-                    app.read_path = v;
-                }
+                // Het leespad wordt bewust NIET gepersisteerd: na herstart
+                // begint het veld leeg (placeholder "~/kopie.iso"), zodat er
+                // geen verouderd pad staat dat misschien niet meer bestaat.
                 if let Some(v) = p.log_filter {
                     app.log_filter = LogFilter(v);
                 }

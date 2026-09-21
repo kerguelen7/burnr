@@ -496,7 +496,9 @@ fn read_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
                 app.read_path = p.display().to_string();
             }
         }
-        let ready = app.scan_state == ScanState::Done && app.busy_drive.is_none();
+        let ready = app.scan_state == ScanState::Done
+            && app.busy_drive.is_none()
+            && !app.read_path.trim().is_empty();
         if ui
             .add_enabled(ready, crate::ui::primary_button(&c, t.image.make_copy_btn))
             .clicked()

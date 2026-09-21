@@ -135,7 +135,9 @@ pub struct MediaTexts {
     pub not_inspected: &'static str,
     /// Prefix "Media" vóór de disc-status.
     pub media_prefix: &'static str,
-    /// Prefix "Station" vóór de drive-status.
+    /// Prefix "Laserstatus" vóór de drive-activiteit (waarde uit de laatste
+    /// inspectie; tijdens een job live). "Station" zou verwarren: het
+    /// mechanisme kan draaien terwijl de laser inactief is.
     pub drive_prefix: &'static str,
     pub unknown: &'static str,
     // Capaciteitsweergave.
@@ -679,7 +681,7 @@ const EN_US: Texts = Texts {
         waiting_for_scan: "(waiting for the drive scan)",
         not_inspected: "Not inspected yet — click “Inspect media”.",
         media_prefix: "Media",
-        drive_prefix: "Drive",
+        drive_prefix: "Laser status",
         unknown: "unknown",
         cap_blank_formatted: "formatted — still empty",
         cap_blocks_suffix: "blocks",
@@ -960,7 +962,7 @@ const NL_NL: Texts = Texts {
         waiting_for_scan: "(wacht op de stationscan)",
         not_inspected: "Nog niet geïnspecteerd — klik op “Media inspecteren”.",
         media_prefix: "Media",
-        drive_prefix: "Station",
+        drive_prefix: "Laserstatus",
         unknown: "onbekend",
         cap_blank_formatted: "geformatteerd — nog leeg",
         cap_blocks_suffix: "blokken",
@@ -1241,7 +1243,7 @@ const DE_DE: Texts = Texts {
         waiting_for_scan: "(wartet auf den Laufwerk-Scan)",
         not_inspected: "Noch nicht inspiziert — auf „Medium inspizieren“ klicken.",
         media_prefix: "Medium",
-        drive_prefix: "Laufwerk",
+        drive_prefix: "Laserstatus",
         unknown: "unbekannt",
         cap_blank_formatted: "formatiert — noch leer",
         cap_blocks_suffix: "Blöcke",
