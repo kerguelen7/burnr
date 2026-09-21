@@ -295,6 +295,11 @@ so it also installs on older releases:
     language-neutral symbols; only the hover texts are in the catalogue
     (en/nl/de). The zoom factor is persisted in the settings file and
     restored (re-clamped) at startup.
+  - **Path reset per session (done)**: the burn ISO path and the disc-image
+    read path are no longer persisted — both fields start empty after a
+    restart (the file set was already session-only). A path passed on the
+    command line (file-manager integration, `burnr image.iso`) still
+    prefills the burn source after loading.
   - **.deb packaging (done)**: `cargo deb` (cargo-deb) builds
     `target/debian/burnr_0.1.1-1_amd64.deb`: binary in `/usr/bin`,
     `burnr.desktop` (exact name = Wayland app id, with en/nl/de comments,

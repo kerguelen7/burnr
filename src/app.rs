@@ -116,7 +116,6 @@ pub struct PersistedState {
     pub settings: Option<BurnSettings>,
     pub exclusive_open: Option<bool>,
     pub burn_source_kind: Option<BurnSourceKind>,
-    pub burn_path: Option<String>,
     pub log_filter: Option<[bool; 4]>,
     pub language: Option<Lang>,
     pub theme: Option<Theme>,
@@ -130,7 +129,6 @@ impl PersistedState {
             settings: Some(app.settings.clone()),
             exclusive_open: Some(app.exclusive_open),
             burn_source_kind: Some(app.burn_source_kind),
-            burn_path: Some(app.burn_path.clone()),
             log_filter: Some(app.log_filter.0),
             language: Some(app.lang),
             theme: Some(app.theme),
@@ -342,12 +340,12 @@ impl App {
                 if let Some(v) = p.burn_source_kind {
                     app.burn_source_kind = v;
                 }
-                if let Some(v) = p.burn_path {
-                    app.burn_path = v;
-                }
-                // Het leespad wordt bewust NIET gepersisteerd: na herstart
-                // begint het veld leeg (placeholder "~/kopie.iso"), zodat er
-                // geen verouderd pad staat dat misschien niet meer bestaat.
+                // De paden (brand-ISO en leesbestemming) worden bewust NIET
+                // gepersisteerd: na herstart beginnen de velden leeg
+                // (placeholders "~/image.iso" / "~/kopie.iso"), zodat er geen
+                // verouderde paden staan die misschien niet meer bestaan.
+                // Een pad via de opdrachtregel (bestandsbeheerder) wordt na
+                // het laden alsnog ingevuld — zie hieronder.
                 if let Some(v) = p.log_filter {
                     app.log_filter = LogFilter(v);
                 }
