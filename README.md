@@ -43,7 +43,11 @@ sudo apt install ./target/debian/burnr_0.1.0-1_amd64.deb         # uninstall: su
 
 The package installs `burnr` in `/usr/bin`, the menu entry
 (`/usr/share/applications/burnr.desktop` — the exact name matching the
-Wayland app id) and hicolor icons (SVG + 128/256 px). `Depends` uses the
+Wayland app id) and hicolor icons (SVG + 128/256 px). The desktop entry
+registers `application/x-iso9660-image`, so `.iso` files can be opened
+with Burnr from the file manager (`Exec=burnr %f`); the MIME cache is
+updated automatically via the desktop-file-utils dpkg trigger — no
+maintainer scripts needed. `Depends` uses the
 t64 package names of Debian trixie with the plain names as alternatives,
 so it also installs on older releases:
 `libc6, libburn4t64 | libburn4, libisofs6t64 | libisofs6`.
@@ -69,6 +73,9 @@ so it also installs on older releases:
   on/off.
 - Multiple drives in parallel with per-drive progress, LED and cancel
 - Session log file for troubleshooting (`~/.local/share/burnr/logs/`)
+- Open `.iso` files from the file manager: right-click → open with Burnr
+  (and selectable as default application); the path is prefilled as burn
+  source, burning never starts automatically (CLI: `burnr image.iso`)
 - Persistent settings (eframe persistence)
 - Interface in **en-US** (default), **nl-NL** or **de-DE** — switch in the
   top bar; the log follows the language as well
@@ -250,6 +257,13 @@ so it also installs on older releases:
 - [ ] **Step 10c — Next thread**: the RAII hardening pass is done (this
   thread), plus zoom controls and the .deb packaging (see below). The
   GitHub publication of the project is next.
+- [ ] **Parked idea — "Flow" island**: one island that visualises the whole
+  procedure per drive — inspect → (erase/format) → choose/compose source →
+  burn → (verify/eject) — with the current step highlighted and the next
+  action suggested. The current islands (Drive & media / Burning /
+  Disc image) each work well on their own and stay the default; a flow
+  view could later tie them together as a guided procedure, e.g. as an
+  optional mode or a compact step indicator in the top bar.
   - **RAII hardening (done)**: new `src/raii.rs` with ownership wrappers
     around every libburn/libisofs handle — `GrabbedDrive` (grab/release/
     regrab/eject), `OwnedDisc/Session/Track/Source/WriteOpts`, `SpeedList`,
@@ -282,15 +296,16 @@ so it also installs on older releases:
     (en/nl/de). The zoom factor is persisted in the settings file and
     restored (re-clamped) at startup.
   - **.deb packaging (done)**: `cargo deb` (cargo-deb) builds
-    `target/debian/burnr_0.1.0-1_amd64.deb`: binary in `/usr/bin`,
+    `target/debian/burnr_0.1.1-1_amd64.deb`: binary in `/usr/bin`,
     `burnr.desktop` (exact name = Wayland app id, with en/nl/de comments,
-    `StartupWMClass=burnr`), hicolor icons (scalable SVG + 128/256 px) and
-    a DEP-5 copyright file. `Depends: libc6, libburn4t64 | libburn4,
-    libisofs6t64 | libisofs6` — the t64 names of trixie (also used on
-    amd64) with the plain names as alternatives for older releases. No
-    maintainer scripts needed: the hicolor icon cache updates via dpkg
-    triggers, and the desktop file needs no MimeType cache (no MIME
-    associations yet).
+    `StartupWMClass=burnr`, `MimeType=application/x-iso9660-image` +
+    `Exec=burnr %f` for file-manager integration), hicolor icons (scalable
+    SVG + 128/256 px) and a DEP-5 copyright file. `Depends: libc6,
+    libburn4t64 | libburn4, libisofs6t64 | libisofs6` — the t64 names of
+    trixie (also used on amd64) with the plain names as alternatives for
+    older releases. No maintainer scripts needed: the hicolor icon cache
+    and the MIME/desktop database update via dpkg triggers
+    (desktop-file-utils, gnome-menus, mailcap).
 
 ## Tests
 

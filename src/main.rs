@@ -15,6 +15,9 @@ mod ui;
 mod worker;
 
 fn main() -> eframe::Result<()> {
+    // Optioneel bestandspad van de bestandsbeheerder (rechtsklik → openen
+    // met Burnr): Exec=burnr %f in burnr.desktop geeft het .iso-pad door.
+    let cli_iso = std::env::args().nth(1);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1180.0, 760.0])
@@ -29,7 +32,7 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Burnr",
         options,
-        Box::new(|cc| Ok(Box::new(app::App::new(cc)))),
+        Box::new(move |cc| Ok(Box::new(app::App::new(cc, cli_iso)))),
     )
 }
 

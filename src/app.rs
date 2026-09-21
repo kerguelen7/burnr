@@ -265,7 +265,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, cli_iso: Option<String>) -> Self {
         cc.egui_ctx.set_theme(egui::ThemePreference::Dark);
         // Zoom-sneltoetsen zelf afhandelen met eigen grenzen (80–160%);
         // egui's standaardafhandeling gebruikt 0,2–5,0 en staat daarom uit.
@@ -369,6 +369,18 @@ impl App {
                 app.log
                     .push(Level::Info, app.lang.texts().app_log.settings_loaded);
             }
+        }
+
+        // ISO-pad van de bestandsbeheerder (rechtsklik → openen met Burnr):
+        // overschrijft het opgeslagen brandpad en zet de bron op ISO. Het
+        // branden zelf start nooit automatisch — alleen voorinvullen.
+        if let Some(path) = cli_iso {
+            app.burn_source_kind = BurnSourceKind::IsoFile;
+            app.burn_path = path.clone();
+            app.log.push(
+                Level::Info,
+                format!("{}: {path}", app.lang.texts().app_log.cli_iso_opened),
+            );
         }
 
         // De worker start op de default-taal; stuur de (mogelijk geladen)

@@ -650,7 +650,27 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
                     }
                 }
             });
+
+        // Volumenaam bovenin (naast de snelheid).
+        if app.burn_source_kind == BurnSourceKind::FileSet {
+            ui.separator();
+            ui.label(t.burn.volume_label);
+            ui.add(egui::TextEdit::singleline(&mut app.volume_id).desired_width(160.0));
+        }
     });
+    // Compose & burn in een eigen rij pal onder snelheid/volumenaam, zodat
+    // de knop altijd zichtbaar blijft ook als de bestandslijst lang wordt
+    // en scrollt.
+    if app.burn_source_kind == BurnSourceKind::FileSet
+        && ui
+            .add_enabled(
+                ready && !app.burn_files.is_empty(),
+                crate::ui::primary_button(&c, t.burn.compose_burn_btn),
+            )
+            .clicked()
+    {
+        app.request_burn_files(d.index);
+    }
 
     // Bronkeuze: ISO-bestand of eigen bestandsselectie (libisofs).
     ui.horizontal(|ui| {
@@ -738,19 +758,6 @@ fn burn_section(ui: &mut egui::Ui, app: &mut App, d: &crate::worker::DriveEntry)
                 ));
             }
 
-            ui.horizontal(|ui| {
-                ui.label(t.burn.volume_label);
-                ui.add(egui::TextEdit::singleline(&mut app.volume_id).desired_width(160.0));
-                if ui
-                    .add_enabled(
-                        ready && !app.burn_files.is_empty(),
-                        crate::ui::primary_button(&c, t.burn.compose_burn_btn),
-                    )
-                    .clicked()
-                {
-                    app.request_burn_files(d.index);
-                }
-            });
             ui.weak(t.burn.compose_hint);
             // Multi-session import (stap 7): bij appendable schrijf-eenmalige
             // media wordt de bestaande sessie geïmporteerd.

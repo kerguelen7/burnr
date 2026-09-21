@@ -545,6 +545,8 @@ pub struct AppLogTexts {
     pub rescan_after_reload: &'static str,
     pub auto_scan_started: &'static str,
     pub no_output_file: &'static str,
+    /// + " {pad}" — ISO via bestandsbeheerder (rechtsklik → openen met).
+    pub cli_iso_opened: &'static str,
     /// + " {index} → `{path}`"
     pub read_requested: &'static str,
     pub cancel_read_requested: &'static str,
@@ -821,6 +823,7 @@ const EN_US: Texts = Texts {
         rescan_after_reload: "Automatic scan follows after the reload.",
         auto_scan_started: "Automatic scan after reload started",
         no_output_file: "No output file given",
+        cli_iso_opened: "ISO file from the file manager accepted as burn source",
         read_requested: "Disc copy requested for drive",
         cancel_read_requested: "Copy cancellation requested",
         no_iso_file: "No ISO file given",
@@ -1102,6 +1105,7 @@ const NL_NL: Texts = Texts {
         rescan_after_reload: "Automatische scan volgt na het herladen.",
         auto_scan_started: "Automatische scan na herladen gestart",
         no_output_file: "Geen uitvoerbestand opgegeven",
+        cli_iso_opened: "ISO-bestand uit de bestandsbeheerder overgenomen als brandbron",
         read_requested: "Schijfkopie aangevraagd voor station",
         cancel_read_requested: "Kopie annuleren aangevraagd",
         no_iso_file: "Geen ISO-bestand opgegeven",
@@ -1383,6 +1387,7 @@ const DE_DE: Texts = Texts {
         rescan_after_reload: "Automatischer Scan folgt nach dem Neuladen.",
         auto_scan_started: "Automatischer Scan nach dem Neuladen gestartet",
         no_output_file: "Keine Ausgabedatei angegeben",
+        cli_iso_opened: "ISO-Datei aus der Dateiverwaltung als Brennquelle übernommen",
         read_requested: "Disc-Kopie angefragt für Laufwerk",
         cancel_read_requested: "Abbruch der Kopie angefragt",
         no_iso_file: "Keine ISO-Datei angegeben",
