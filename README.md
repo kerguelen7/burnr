@@ -8,6 +8,8 @@ libburn is **not compiled in**: at runtime the GUI loads the system shared
 object (`libburn.so.4`). As a result the GUI builds and starts even on systems
 where libburn is not (yet) installed, and then explains what is needed.
 
+<img width="1919" height="790" alt="screenshot-burnr-gui-detail-v0 9" src="https://github.com/user-attachments/assets/c8768af1-d4a8-4c63-a2a1-460103989db3" />
+
 ## Requirements
 
 - Rust 1.85+ (edition 2024; developed and tested with 1.96)
