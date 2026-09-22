@@ -38,7 +38,7 @@ cargo build --release
 
 ```sh
 cargo deb                                                        # needs cargo-deb: cargo install cargo-deb --locked
-sudo apt install ./target/debian/burnr_0.1.0-1_amd64.deb         # uninstall: sudo apt remove burnr
+sudo apt install ./target/debian/burnr_0.9.0-1_amd64.deb         # uninstall: sudo apt remove burnr
 ```
 
 The package installs `burnr` in `/usr/bin`, the menu entry
@@ -301,7 +301,7 @@ so it also installs on older releases:
     command line (file-manager integration, `burnr image.iso`) still
     prefills the burn source after loading.
   - **.deb packaging (done)**: `cargo deb` (cargo-deb) builds
-    `target/debian/burnr_0.1.1-1_amd64.deb`: binary in `/usr/bin`,
+    `target/debian/burnr_0.9.0-1_amd64.deb`: binary in `/usr/bin`,
     `burnr.desktop` (exact name = Wayland app id, with en/nl/de comments,
     `StartupWMClass=burnr`, `MimeType=application/x-iso9660-image` +
     `Exec=burnr %f` for file-manager integration), hicolor icons (scalable
