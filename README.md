@@ -254,9 +254,11 @@ so it also installs on older releases:
   timestamps, eject), quickstart guide (`QUICKSTART.md`), README fully in
   en-US, `rust-version` pinned, clippy-clean, and the license
   (GPL-3.0-or-later, see `LICENSE`).
-- [ ] **Step 10c — Next thread**: the RAII hardening pass is done (this
-  thread), plus zoom controls and the .deb packaging (see below). The
-  GitHub publication of the project is next.
+- [x] **Step 10c — Done**: the RAII hardening pass, zoom controls, the .deb
+  packaging and the GitHub publication. The project lives at
+  [github.com/kerguelen7/burnr](https://github.com/kerguelen7/burnr) and is
+  published as **v0.9.0** (first public release, with the .deb as a
+  release asset).
 - [ ] **Parked idea — "Flow" island**: one island that visualises the whole
   procedure per drive — inspect → (erase/format) → choose/compose source →
   burn → (verify/eject) — with the current step highlighted and the next
