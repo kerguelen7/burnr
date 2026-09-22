@@ -329,3 +329,10 @@ quietly skip.
 
 GNU General Public License version 3 **or later** — see [LICENSE](LICENSE).
 (`QUICKSTART.md` has a one-page getting-started guide.)
+
+## Acknowledgements
+
+- [libburn](https://libburnia-project.org/) / [libisofs](https://libburnia-project.org/) —
+  the libraries doing the actual optical work (loaded at runtime, not compiled in)
+- The GUI was developed by hand, with GLM (Z.ai) as an AI coding assistant
+  in the Zed editor — design, testing and all decisions by the author
